@@ -8,7 +8,7 @@
 \usepackage{hyperref}
 
 \lstnewenvironment{ccode}
-  {\lstset{language=c,frame=tlb,basicstyle={\footnotesize\tt}}}{}
+  {\lstset{language=c,frame=tlb,basicstyle={\scriptsize\tt}}}{}
 
 \begin{document}
   \title{MathBio 2008 Evolution Model}
@@ -414,6 +414,12 @@ $ ./model-runtime < profiles/my_profile > output.csv
               \item Vary population size. Is $500 = \infty$?
               \item Vary sample size. Check 20, 50, 100.
             \end{enumerate}
+
+	  \item Performance improvements.
+	    \begin{enumerate}
+	      \item Make the arbitrary matrix support optional. Special-case for
+	      subdivisions and bottlenecks?
+	    \end{enumerate}
         \end{enumerate}
 
     \subsection{Required Libraries}
@@ -2154,6 +2160,9 @@ inline void populate_parent_fitness (population *parents, simulation_parameters 
     double current;
 
     switch (sp->selection_model) {
+      case DIVERSIFYING_SELECTION:
+	current = diversifying_selection (parents, i, sp);
+	break;
       case PURIFYING_SELECTION:
 	current = purifying_selection (parents, i, sp);
 	break;
@@ -2625,7 +2634,8 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
 
 	 ((! strcmp (s, "selection-model:")) && fscanf (f, "%65535s", s) &&
           ((! strcmp (s, "neutral") && ! (sp->selection_model = NEUTRAL_SELECTION)) ||
-           (! strcmp (s, "purifying") && (sp->selection_model = PURIFYING_SELECTION)))) ||
+           (! strcmp (s, "purifying") && (sp->selection_model = PURIFYING_SELECTION)) ||
+	   (! strcmp (s, "diversifying") && (sp->selection_model = DIVERSIFYING_SELECTION)))) ||
 
 	 ((! strcmp (s, "drift-model:")) && fscanf (f, "%65535s", s) &&
           ((! strcmp (s, "neutral") && ! (sp->drift_model = NEUTRAL_DRIFT)) ||

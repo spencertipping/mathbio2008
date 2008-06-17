@@ -1,0 +1,6 @@
+begin-comment
+Neutral model with large sample size.
+end-comment
+
+trials: 10000
+sample-size: 100

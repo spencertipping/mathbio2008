@@ -1,0 +1,6 @@
+begin-comment
+Generates a distribution with a small population size.
+end-comment
+
+trials: 10000
+population-size: 200
