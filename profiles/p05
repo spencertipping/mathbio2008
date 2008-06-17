@@ -1,0 +1,9 @@
+begin-comment
+Even subdivision. Creates a distribution with subdivision into 50/50.
+end-comment
+
+trials: 10000
+drift-model: even-subdivision
+even-subdivision-start: 200
+even-subdivision-duration: 800
+even-subdivision-size: 250

@@ -1,0 +1,5 @@
+begin-comment
+Generate a distribution of neutral model data.
+end-comment
+
+trials: 10000

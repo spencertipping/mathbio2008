@@ -1,0 +1,10 @@
+begin-comment
+Bottlenecks. Generate a distribution for bottlenecks that run until generation
+900.
+end-comment
+
+trials: 10000
+drift-model: sharp-bottleneck
+sharp-bottleneck-start: 200
+sharp-bottleneck-duration: 700
+sharp-bottleneck-size: 100

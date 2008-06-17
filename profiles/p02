@@ -1,0 +1,7 @@
+begin-comment
+Generates a distribution for purifying selection.
+end-comment
+
+trials: 10000
+selection-model: purifying
+purifying-selection-coefficient: 0.08

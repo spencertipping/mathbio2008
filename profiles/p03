@@ -1,0 +1,6 @@
+begin-comment
+Diversifying selection. This builds a distribution.
+end-comment
+
+trials: 10000
+selection-model: diversifying
