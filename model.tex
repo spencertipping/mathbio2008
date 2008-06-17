@@ -1,0 +1,2767 @@
+\documentclass{article}
+
+\usepackage{palatino}
+\usepackage{mathpazo}
+\usepackage{listings}
+\usepackage{hyperref}
+
+\lstnewenvironment{ccode}
+  {\lstset{language=c}}{}
+
+\begin{document}
+  \title{MathBio 2008 Evolution Model}
+  \author{Spencer Tipping}
+  \maketitle
+
+  \begin{abstract}
+    
+    This program is designed to generate populations and then run statistical
+    analysis on the results. All output is to the standard output unless
+    otherwise specified. There is no warranty, express or implied, provided with
+    this code, nor any guarantee of merchantability or fitness for any purpose.
+
+    The \verb|sd| tool for literate coding and the GCC toolchain, along with a
+    compliant Make, are required to build this system. \LaTeX is required to
+    build documentation. For more information about rebuilding, see section
+    \ref{sec:rebuilding}.
+
+  \end{abstract}
+
+  \tableofcontents
+
+  \def\D{$D$}
+  \def\Ds{$D_{syn}$}
+  \def\Dn{$D_{non}$}
+
+  \section{Introduction}
+    \label{sec:introduction}
+
+    The purpose of this project is to generate data used in determining the
+    correlation between values of Tajima's \D{} statistic as computed for a
+    population and the evolutionary and demographic history of that population.
+    Computation proceeds in two major steps: First, the population's evolution
+    is simulated by applying the forces that would apply in nature. Then, once
+    sufficiently many generations have been simulated, we look at the last
+    generation, take a randomly chosen subset for statistical sampling, and
+    calculate values of \Ds{} and \Dn. This process comprises a single trial.
+
+    After many trials, each with a different random seed, we compile
+    distributions of the resulting \D{} statistics. These distributions allow
+    Bayesian categorization of future \D{} values.
+
+\begin{ccode}
+#ifndef __MODEL_H
+#define __MODEL_H
+\end{ccode}
+
+  \section{Using the Model}
+    \label{sec:using}
+
+    This file contains the core workings of the model, but it does not provide a
+    runtime environment. The runtime is provided by \verb|model-runtime.c|,
+    which includes the header file produced by this \TeX document. Using the
+    runtime environment requires a {\em profile}, which is a set of
+    configuration information for a single simulation run.
+
+    \subsection{Profiles}
+      \label{sec:profiles}
+
+      A profile is a plain text file with a standard format. Each line consists
+      of a series of directives, comment words, and/or values. A directive has
+      the format \verb|directive[: value][;]|, where \verb|value| may be a
+      number, plain text (not inside quotation marks), or otherwise as dictated
+      by the directive. A semicolon is used only if the data for the directive
+      is a genetic sequence. Comments begin with the directive
+      \verb|begin-comment| and end with the directive \verb|end-comment|. Below
+      is a list of the currently supported directives and their functions.
+
+      \subsubsection{Notation}
+        \label{sec:notation}
+
+        Generally, the options below follow a naming convention that allows the
+        user to infer the type of each option. When any deviations from this
+        convention occur, they are specifically noted. Consider this option
+        definition:
+
+        \begin{center}
+          generations: $n$
+        \end{center}
+
+        \noindent $n$ indicates that the value expected by the {\em generations}
+        directive should be a positive integer. $x$ would indicate a real
+        number, $\alpha$, $\beta$, or $\gamma$ indicates that the value is a
+        member of a later-defined set, and $s$ indicates that the value is a
+        genetic sequence. For an example of how these values are specified, see
+        section \ref{sec:example-profile}.
+
+      \subsubsection{Output directives}
+        \label{sec:output-directives}
+
+        These directives determine the format of the output. They do not impact
+        the biological settings of the model in any way.
+
+        \begin{enumerate}
+          \item[trials: $n$]
+          Sets the number of trials to run. By default, this is set to 50. Time
+          complexity is $O(n)$ in the number of trials, and space complexity is
+          $O(1)$.
+
+          \item[print-sequences]
+          Specifying this directive will cause the simulation to print all of
+          the sequences in the statistical sample as well as the resulting
+          statistical computations. This is primarily useful for verifying the
+          statistical code. If this directive is absent, sequences will not be
+          printed.
+
+          \item[print-each-generation]
+          Specifying this directive will cause the simulation to print
+          statistical measurements at each generation, not just at the end. If
+          this directive is absent, only the final statistics will be printed.
+
+          \item[full-tracing]
+          Specifying this directive will enable full tracing of the evolutionary
+          history as it progresses. This is useful for statistical verification
+          of the estimators used to calculate theta. Enabling this option will
+          make the space complexity of the simulation increase to $O(n)$ in the
+          number of generations instead of $O(1)$. For particulars of what this
+          entails, see section \ref{sec:full-tracing}.
+        \end{enumerate}
+
+      \subsubsection{General-purpose biological directives}
+        \label{sec:general-directives}
+
+        These directives alter the fundamental behavior of the model in a
+        significant way, and are commonly used to select different types of
+        simulation. Generally speaking, nothing biologically unrealistic, beyond
+        the known unrealism of our global assumptions, will happen for
+        reasonable values of these parameters.
+
+        \begin{enumerate}
+          \item[population-size: $n$]
+          Sets the number of individuals per generation. By default, this is set
+          to 500. Time complexity is $O(n)$ in the number of individuals for the
+          neutral model, $O(n \log n)$ for purifying selection, $O(n^2)$ if
+          drift is used, and $O(n^2)$ if diversifying selection is used. Space
+          complexity is $O(n)$ in the population size.
+
+          \item[generations: $n$]
+          Sets the number of generations to simulate. By default, this is set to
+          1000. Time complexity is $O(n)$ in the number of generations, and
+          space complexity is $O(1)$ if full tracing is not used, and $O(n)$ if
+          full tracing is used.
+
+          \item[sample-size: $n$]
+          Sets the sample size for statistical calculations. By default, this is
+          set to 20. Time complexity is $O(n^2)$ if full tracing is not used and
+          $O(p(n))$ if full tracing is used, and space complexity is $O(1)$. In
+          practice, statistical calculations take so little time relative to the
+          simulation that for most purposes the effects are negligible.
+
+          \item[mutations-per-nucleotide: $x$]
+          Sets the mutation rate on a per-nucleotide basis. This occurs per
+          reproductive cycle (generation) per individual. By default, this is
+          set to $3.4 \times 10^{-5}$.
+
+          \item[transitions-per-transversion: $x$]
+          Sets the ratio of transitions to transversions for the HKY-85 model.
+          By default, this is set to 1.3.
+
+          \item[frequency-$\alpha$: $x$]
+          Sets the relative frequency of the $\alpha$ nucleotide for the HKY-85
+          model, where $\alpha$ is one of $\{a, c, g, u\}$. Must be between 0
+          and 1. By default, all nucleotides have the same frequency; thus,
+          this is set to 0.25.
+
+          \item[recombination-rate: $x$]
+          Sets the recombination rate per individual per generation. By default,
+          this is set to $2.4 \times 10^{-5}$.
+
+          \item[ancestral-sequence: $s$;]
+          Sets the ancestral sequence $s$ used to create the initial population.
+          by default, this is set to the sequence {\tt UGU ACA AGA AAC AAC AAU
+          ACA AUA AAA AGU AUA CAU AUG GGA CUA GGG AGG ACA UUU UAU ACA ACA GGA
+          GAA GUA AUA GGA GAU AUA AGA CAA GCA CAU UGU}. Sequences may contain
+          the characters $A$, $C$, $G$, $T$, and $U$, and {\em cannot contain
+          any whitespace}.
+
+          \item[selection-model: $\beta$]
+          Sets the selection model to $\beta$, where $\beta$ is one of {\em
+          neutral}, {\em purifying}, or {\em diversifying}. By default, this is
+          set to {\em neutral}.
+
+          \item[drift-model: $\gamma$]
+          Sets the drift model to $\gamma$, where $\gamma$ is one of {\em
+          neutral}, {\em sharp-bottleneck}, or {\em even-subdivision}. By
+          default, this is set to {\em neutral}.
+        \end{enumerate}
+
+      \subsubsection{Model-specific parameters}
+        \label{sec:model-directives}
+
+        These parameters are relevant only if selection or drift are being used.
+        They determine the extent, duration, and other aspects of models. Below
+        is a list of parameters for each model:
+
+        \begin{description}
+          \item[Purifying selection]
+            \begin{enumerate}
+              \item[purifying-selection-coefficient: $x$]
+              Sets the selection coefficient $s$ used for purifying selection.
+              By default, this is set to 0.1. This parameter must be in the set
+              $(0, 1)$.
+
+              \item[purifying-optimal-sequence: $s$]
+              Sets the sequence used by purifying selection to represent the
+              optimal individual. Each individual's fitness is determined by
+              scoring against this sequence. By default, this is set to the
+              default ancestral sequence. This sequence and the ancestral
+              sequence must be of equal length.
+            \end{enumerate}
+
+          \item[Sharp bottlenecks]
+            \begin{enumerate}
+              \item[sharp-bottleneck-start: $n$]
+              Sets the generation at which the bottleneck begins. By default,
+              this is set to 200. It is an error to begin a bottleneck after the
+              end of a simulation run.
+
+              \item[sharp-bottleneck-duration: $n$]
+              Sets the number of generations during which the bottleneck is in
+              effect. By default, this is set to 500. A warning is produced if
+              the bottleneck extends past the end of the simulation.
+
+              \item[sharp-bottleneck-size: $n$]
+              Sets the population size while the bottleneck is in effect. By
+              default, this option is set to 50.
+            \end{enumerate}
+
+          \item[Even subdivisions]
+            \begin{enumerate}
+              \item[even-subdivision-start: $n$]
+              Sets the generation at which the subdivision begins. By default,
+              this is set to 200. It is an error to begin a subdivision after
+              the end of a simulation run.
+
+              \item[even-subdivision-duration: $n$]
+              Sets the number of generations during which the subdivision is in
+              effect. By default, this is set to 500. A warning is produced if
+              the subdivision extends beyond the end of the simulation.
+
+              \item[even-subdivision-size: $n$]
+              Sets the number of individuals in each subdivision. By default,
+              this is set to 50. If this number does not evenly divide the
+              population size, individual subdivisions will be rounded down and
+              the rest of the population will occupy a remainder subdivision.
+            \end{enumerate}
+        \end{description}
+
+      \subsubsection{Internal directives}
+        \label{sec:internal-directives}
+
+        These directives alter the functionality of the model's internal
+        subroutines and require implementation-specific knowledge to use
+        effectively. The default values of these paramters are acceptable for
+        all normal use, and specifying values for these parameters may cause the
+        model to deviate from biological realism. Specifying any internal
+        parameter will produce a warning indicating that the simulation may not
+        be biologically realistic.
+
+        \begin{enumerate}
+          \item[assumed-gl-variance: $x$]
+          If $x \neq 0$, this option enables variance optimization in the theta
+          calculation. This entails taking a linear combination of genetic
+          likelihoods and the Nei and Gojobori ratios to minimize the
+          statistical variance of the nonsynonymity estimate (see section
+          \ref{sec:theta-variance-minimization}). One caveat of enabling
+          variance optimization is that it may not improve accuracy, since
+          neither estimator is known to be unbiased. A sensible nonzero value
+          for this setting is $1 \over 5$, indicating that the genetic
+          likelihood estimator is assumed to be as accurate as Nei and Gojobori
+          ratios for a position with 5 singletons.
+
+          \item[random-seed: $n$]
+          Seeds the random number generator with $n$ before any trials are run.
+          This facilitates reusability across runs. By default, the random
+          number generator is seeded with the system's clock value at
+          microsecond resolution, so this should not be necessary unless a
+          previous trial is to be rerun.
+        \end{enumerate}
+
+      \subsubsection{Example profile}
+        \label{sec:example-profile}
+
+        Here is an example profile, created using \verb|cat| and saved into the
+        \verb|profiles| directory:
+
+        \begin{verbatim}
+$ cat > profiles/my_profile <<EOF
+begin-comment
+my_profile: An example profile
+
+We want to run a lot of trials to build a distribution.
+Correspondingly, we reduce the number of individuals to
+make it go faster.
+end-comment
+
+trials: 10000
+population-size: 50
+
+begin-comment
+Create some settings for other parameters as well:
+end-comment
+
+frequency-a: 0.9
+frequency-c: 0.09
+frequency-g: 0.009
+frequency-u: 0.001
+
+ancestral-sequence: ACA UCU GGG;
+purifying-optimal-sequence: UUU GGG AAA;
+selection-model: purifying
+selection-coefficient: 0.5
+EOF
+        \end{verbatim}
+
+        Here is an invocation of the model using that profile:
+
+        \begin{verbatim}
+$ ./model-runtime < profiles/my_profile > output.csv
+        \end{verbatim}
+
+    \subsection{Rebuilding}
+      \label{sec:rebuilding}
+    
+      Should the model need to be rebuilt for any reason, a makefile with
+      appropriate rules is established to facilitate the process. Also, the
+      model is stored in a Git repository, so after appropriate testing changes
+      should be committed. These aspects of rebuilding are described in detail
+      below.
+
+      \subsubsection{Using {\em make}}
+        \label{sec:make}
+
+        GNU Make is a program that manages build dependencies. In this project,
+        for example, \verb|model.h|, which provides all of the code, depends on
+        \verb|model.tex| in that if \verb|model.tex| is altered then
+        \verb|model.h| must be regenerated. For more information about Make, run
+        \verb|info make| or visit \url{http://www.gnu.org/software/make}. Below
+        is a list of commands relevant to this project:
+
+        \begin{enumerate}
+          \item[\tt make all]
+          Rebuilds the entire system, including documentation.
+
+          \item[\tt make bin]
+          Rebuilds all binaries but not documentation. This is especially useful
+          to observe any warnings printed by GCC without scrolling past \TeX
+          output.
+
+          \item[\tt make doc]
+          Rebuilds this documentation.
+
+          \item[\tt make mem]
+          Runs the debugging image of the simulation under \verb|valgrind|
+          (requires that Valgrind is installed), which checks for memory access
+          violations and memory leaks. It is run with the profile in
+          \verb|profiles/mem|, which runs with few trials and a small population
+          size to compensate for the slowdown that results from running a
+          program with Valgrind.
+
+          \item[\tt make prof]
+          Profiles the execution of the debugging build. The debugging build is
+          identical to the main build with the exception that function inlining
+          is not performed. This results in more precise location of performance
+          bottlenecks.
+        \end{enumerate}
+
+      \subsubsection{Using {\em git}}
+        \label{sec:git}
+
+        Git is a self-contained source code control system. For information
+        about the commands supported by Git, see
+        \url{http://www.kernel.org/pub/software/scm/git/docs/user-manual.html}.
+
+      \subsubsection{Todo}
+        \label{sec:todo}
+
+        These are some of the objectives our team has for the summer:
+
+        \begin{enumerate}
+          \item Generate distributions for various configurations.
+            \begin{enumerate}
+              \item Neutral model: 10000 trials.
+              \item Purifying selection with $s=0.01$: 1000 trials.
+              \item Purifying selection with $s=0.08$: 1000 trials.
+              \item Purifying selection with $s=0.5$: 1000 trials.
+            \end{enumerate}
+
+          \item Check finite vs.\ infinite sites.
+            \begin{enumerate}
+              \item Lengthen sequence to 10000 bp, but preserve per-individual
+              mutation rate.
+            \end{enumerate}
+
+          \item Perform sensitivity analysis.
+            \begin{enumerate}
+              \item Vary population size. Is $500 = \infty$?
+              \item Vary sample size. Check 20, 50, 100.
+            \end{enumerate}
+        \end{enumerate}
+
+    \subsection{Required Libraries}
+      \label{sec:libraries}
+
+      The standard libraries will suffice for the majority of the functionality
+      of this program. The only nonstandard library is bundled with the source
+      code in the file \verb|ca-rng.h|. This file provides a cellular
+      automaton-based random number generator that is about three times as fast
+      as the system's built-in random algorithm.
+
+\begin{ccode}
+#include <stdlib.h>
+#include <stdio.h>
+#include <math.h>
+#include <sys/time.h>
+#include <time.h>
+#include <string.h>
+
+#include "ca-rng.h"
+\end{ccode}
+
+    \subsection{{\em Malloc} Wrappers}
+      \label{sec:malloc}
+
+      Sometimes memory allocation fails, and we want to handle this case
+      uniformly. Currently, we just print an error message and quit.
+
+\begin{ccode}
+inline void *safe_malloc (size_t size) {
+  void *result = malloc (size);
+  if (result)
+    return result;
+  else {
+    fprintf (stderr, "Error: %d bytes of memory could not be allocated.\n", size);
+    exit (EXIT_FAILURE);
+  }
+}
+\end{ccode}
+
+    \subsection{Hierarchical Structures}
+      \label{sec:hierarchical}
+
+      We end up using a lot of memory management functions for hierarchical data
+      structures. Rather than write each one from scratch, we use the C
+      preprocessor to generate templates for these structures. A structure uses
+      these definitions:
+
+      \begin{enumerate}
+        \item[Ensure function]
+        Ensures that a structure is of the appropriate size. After
+        \verb|ensure_x (px, l)|, \verb|*px| will have the appropriate number of
+        data elements and its length set.
+
+        \item[Create function]
+        Creates an empty structure and returns it. To completely delete the
+        structure and its children, use the delete function.
+
+        \item[Delete function]
+        Deletes a structure and all of its dependent structures. Leaves the
+        structure itself allocated, since structures are sometimes allocated on
+        the stack instead of on the heap.
+      \end{enumerate}
+
+\begin{ccode}
+#define __hierarchical_structure__(parent_type, child_type) \
+typedef struct { \
+  unsigned int length; \
+  child_type *data; \
+} parent_type;
+
+#define __ensure_function_simple__(parent_type, child_type) \
+inline void ensure_##parent_type (parent_type *s, unsigned int length) { \
+  if (s->length != length) { \
+   if (s->data) \
+      free (s->data); \
+   s->data = (child_type*) safe_malloc (length * sizeof (child_type)); \
+   s->length = length; \
+  } \
+}
+
+#define __ensure_function_complex__(parent_type, child_type) \
+inline void ensure_##parent_type (parent_type *s, unsigned int length) { \
+  if (s->length != length) { \
+   for (unsigned int i = 0; i < s->length; i++) \
+      delete_##child_type (s->data + i); \
+   free (s->data); \
+   s->data = (child_type*) safe_malloc (length * sizeof (child_type)); \
+   s->length = length; \
+   for (unsigned int i = 0; i < s->length; i++) { \
+      s->data[i].data = NULL; \
+      s->data[i].length = 0; \
+   } \
+  } \
+}
+
+#define __create_function__(parent_type, child_type) \
+inline parent_type *create_##parent_type () { \
+  parent_type* result = (parent_type*) safe_malloc (sizeof (parent_type)); \
+  result->length = 0; \
+  result->data = NULL; \
+  return result; \
+}
+
+#define __delete_function_simple__(parent_type, child_type) \
+inline void delete_##parent_type (parent_type *s) { \
+  if (s) { \
+   free (s->data); \
+   s->data = NULL; \
+   s->length = 0; \
+  } \
+}
+
+#define __delete_function_complex__(parent_type, child_type) \
+inline void delete_##parent_type (parent_type *s) { \
+  if (s) { \
+   for (unsigned int i = 0; i < s->length; i++) \
+      delete_##child_type (s->data + i); \
+   free (s->data); \
+   s->data = NULL; \
+   s->length = 0; \
+  } \
+}
+
+#define __functions_complex__(parent_type, child_type) \
+__ensure_function_complex__(parent_type, child_type) \
+__create_function__(parent_type, child_type) \
+__delete_function_complex__(parent_type, child_type)
+
+#define __functions_simple__(parent_type, child_type) \
+__ensure_function_simple__(parent_type, child_type) \
+__create_function__(parent_type, child_type) \
+__delete_function_simple__(parent_type, child_type)
+
+#define __define_structure_complex__(parent_type, child_type) \
+__hierarchical_structure__(parent_type, child_type) \
+__functions_complex__(parent_type, child_type)
+
+#define __define_structure_simple__(parent_type, child_type) \
+__hierarchical_structure__(parent_type, child_type) \
+__functions_simple__(parent_type, child_type)
+\end{ccode}
+
+    \subsection{Random Numbers}
+      \label{sec:random}
+
+      At the moment I am using a cellular automaton-based random number
+      generator implemented by Tony Pasqualoni. It outperforms more traditional
+      random number generators such as the Mersenne Twister algorithm by a
+      factor of three, and as far as is known produces results of comparable
+      quality. The source code for this generator may be found in
+      \verb|ca-rng.h|. These wrapper functions facilitate easy replacement of
+      the random number generator being used.
+
+\begin{ccode}
+inline void seed_rng (unsigned int seed)
+  {ca_rng_initialize (seed);}
+
+inline unsigned int random_integer ()
+  {return ca_rng_get_int ();}
+
+inline double normalized_random ()
+  {return (double) random_integer () / (double) 0xfffffffful;}
+\end{ccode}
+
+  \section{Model Framework}
+    \label{sec:framework}
+
+    The model framework involves defining types and functions for convenient
+    manipulation of biological structures. First, we define the data types that
+    represent the biological structures, and then we define the functions that
+    manipulate those structures.
+
+\begin{ccode}
+typedef unsigned char amino_acid;
+typedef unsigned char codon;
+typedef unsigned char nucleotide;
+typedef long long int codon_set;
+typedef unsigned char bool;
+
+#define FALSE (0 == 1)
+#define TRUE (! FALSE)
+\end{ccode}
+
+    \subsection{Codons and Amino Acids}
+      \label{sec:codons-amino-acids}
+
+      Codons are represented by 8-bit integers, as are amino acids. Each codon
+      takes on values between 0 and 63, inclusive. Amino acids take on values
+      between 0 and 20, inclusive. Nucleotide values are defined according to
+      some biological properties. Flipping the lower-order bit performs a
+      transition, for instance. If $U = 0$, $C = 1$, $A = 2$, and $G = 3$, then
+      the numerical representation of the codon UCA is the binary number 000110.
+      So the least-significant nucleotide is the third one. This must be
+      strictly adhered to throughout the code for consistency. In terms of
+      ordering, the nucleotides are ordered increasing by significance; so
+      nucleotide 0 is A, nucleotide 1 is C, and nucleotide 2 is U. This
+      facilitates the bitshifting required to extract or replace individual
+      nucleotides.
+      
+      Also, the structure of codons is purely numerical at the moment, but that
+      could change. When we want to use a codon as a number, we should ab-
+      stract that through the \verb|_idx| macro, which, should the structure of
+      a codon ever change in the future, will return the codon as an index and
+      not as a structure.
+
+\begin{ccode}
+#define _idx(c) (c)
+
+#define _u 0
+#define _c 1
+#define _a 2
+#define _g 3
+#define _co(n1, n2, n3) (((n1) << 4) | ((n2) << 2) | (n3))
+
+#define ser 0
+#define phe 1
+#define leu 2
+#define tyr 3
+#define sto 4
+#define cys 5
+#define trp 6
+#define pro 7
+#define his 8
+#define gln 9
+#define arg 10
+#define ile 11
+#define met 12
+#define thr 13
+#define asn 14
+#define lys 15
+#define val 16
+#define ala 17
+#define asp 18
+#define glu 19
+#define gly 20
+\end{ccode}
+
+      We implement a lookup table to translate codons into amino acids.
+
+\begin{ccode}
+static const amino_acid amino_lookup[64] = {
+    phe, phe, leu, leu,
+    ser, ser, ser, ser,
+    tyr, tyr, sto, sto,
+    cys, cys, sto, trp,
+
+    leu, leu, leu, leu,
+    pro, pro, pro, pro,
+    his, his, gln, gln,
+    arg, arg, arg, arg,
+
+    ile, ile, ile, met,
+    thr, thr, thr, thr,
+    asn, asn, lys, lys,
+    ser, ser, arg, arg,
+
+    val, val, val, val,
+    ala, ala, ala, ala,
+    asp, asp, glu, glu,
+    gly, gly, gly, gly};
+\end{ccode}
+
+    \subsection{Codon Functions}
+      \label{sec:codon-functions}
+
+      We define a number of other accessor functions for working with codons.
+
+\begin{ccode}
+inline codon inherit (codon c1, codon c2, unsigned int ni) {
+  codon mask = (codon) (3 << (ni * 2));
+  return (c1 & (0x3f ˆ mask)) | (c2 & mask);
+}
+
+inline codon inherit_nuc (codon c, nucleotide n, unsigned int ni)
+  {return inherit (c, _co(n, n, n), ni);}
+
+inline nucleotide pick (codon c, unsigned int ni) {
+  unsigned int shift_amount = ni * 2;
+  return (codon) ((c & (3 << shift_amount)) >> shift_amount);
+}
+
+inline codon mask (codon c1, codon c2) {
+  codon diff = c1 ˆ c2;
+  return (diff & 0x15) | ((diff & 0x2a) >> 1);
+}
+
+inline unsigned int changes (codon c1, codon c2)
+  {return (unsigned) (mask (c1, c2) % 3);}
+
+inline bool synonymous (codon c1, codon c2)
+  {return amino_lookup[(unsigned int) _idx(c1)] == amino_lookup[(unsigned int) _idx(c2)];}
+
+inline bool is_purine (nucleotide n)
+  {return !! (n & 2);}
+\end{ccode}
+
+    \subsection{Structure Definitions}
+      \label{sec:structure-definitions}
+
+      Later on, we'll need a full hierarchy of structures, including sequences
+      and populations. We define those here so that we can define all dependent
+      structures. For more information about how these \verb|define_structure|
+      macros work, see section \ref{sec:hierarchical}.
+
+\begin{ccode}
+__define_structure_simple__(sequence, codon)
+__define_structure_complex__(population, sequence)
+__define_structure_simple__(fitness_vector, double)
+__define_structure_simple__(theta_array, double)
+\end{ccode}
+
+      We also define structures to trace the evolutionary history of an
+      individual. These are arranged in a binary lattice that for the most part
+      is a tree. The only real exception to the tree structure is a
+      recombination event, which splits the evolutionary history.
+
+\begin{ccode}
+typedef struct {
+  unsigned int parent_index;
+  unsigned int recombination_nucleotide;  // = 0 if no recombination, = 3 if position 0.
+  unsigned int other_parent_index;
+
+  codon	state_before_mutation;
+  codon state_after_mutation;
+} individual_history_node;
+
+__define_structure_simple__(individual_history, individual_history_node)
+__define_structure_complex__(generation_history, individual_history)
+__define_structure_complex__(population_history, generation_history)
+\end{ccode}
+
+    \subsection{Simulation Parameters}
+      \label{sec:simulation-parameters}
+
+      This is the structure that contains the parameter set for the entire
+      simulation runtime.
+
+\begin{ccode}
+#define NEUTRAL_SELECTION 0
+#define PURIFYING_SELECTION 1
+#define DIVERSIFYING_SELECTION 2
+
+#define NEUTRAL_DRIFT 0
+#define SHARP_BOTTLENECK_DRIFT 1
+#define EVEN_SUBDIVISION_DRIFT 2
+
+typedef struct {
+  double mutations_per_nucleotide;
+  double transitions_per_transversion;
+  double frequency_a;
+  double frequency_c;
+  double frequency_g;
+  double frequency_u;
+} hky85_params;
+
+typedef struct {
+  unsigned int		random_seed;
+  unsigned int		number_of_trials;
+  unsigned int		population_size;
+  unsigned int		generations;
+  unsigned int		sample_size;
+
+  hky85_params		mutation_parameters;
+
+  double		recombination_rate;
+  double		assumed_gl_variance;
+  
+  sequence		*ancestral_sequence;
+  bool			print_sequences;
+  bool			print_each_generation;
+  bool			full_tracing;
+  char			*image_name;
+
+  unsigned int		selection_model;
+  unsigned int		drift_model;
+
+  double		purifying_selection_coefficient;
+  sequence		*purifying_optimal_sequence;
+
+  unsigned int		sharp_bottleneck_start;
+  unsigned int		sharp_bottleneck_duration;
+  unsigned int		sharp_bottleneck_size;
+
+  unsigned int		even_subdivision_start;
+  unsigned int		even_subdivision_duration;
+  unsigned int		even_subdivision_size;
+
+  // These fields are used for internal purposes.
+  fitness_vector	*parent_fitness_vector;
+  fitness_vector	*child_fitness_vector;
+  fitness_vector	*result_fitness_vector;
+  population_history	*history;
+} simulation_parameters;
+
+inline void delete_simulation_parameters (simulation_parameters *sp) {
+  delete_sequence (sp->ancestral_sequence);
+  delete_sequence (sp->purifying_optimal_sequence);
+  free (sp->ancestral_sequence); sp->ancestral_sequence = NULL;
+  free (sp->purifying_optimal_sequence); sp->purifying_optimal_sequence = NULL;
+
+  delete_population_history (sp->history);
+  free (sp->history); sp->history = NULL;
+
+  delete_fitness_vector (sp->parent_fitness_vector);
+  delete_fitness_vector (sp->child_fitness_vector);
+  delete_fitness_vector (sp->result_fitness_vector);
+  free (sp->parent_fitness_vector); sp->parent_fitness_vector = NULL;
+  free (sp->child_fitness_vector); sp->child_fitness_vector = NULL;
+  free (sp->result_fitness_vector); sp->result_fitness_vector = NULL;
+
+  // We do not free the image name because the memory for this is usually
+  // stack-allocated, not heap-allocated.
+}
+\end{ccode}
+
+    \subsection{Genetic Likelihoods}
+      \label{sec:genetic-likelihoods}
+
+      Here we define the genetic likelihoods matrix and an initialization
+      function for it.
+
+\begin{ccode}
+static double genetic_code_nonsyn_likelihoods[3][64];
+
+void initialize_genetic_likelihoods () {
+  // Count the number of changes in each position that produce a nonsynonymous
+  // change. The proportion will be stored in each cell.
+  for (codon c = 0; c < 64; c++)
+    for (unsigned int position = 0; position < 3; position++) {
+      genetic_code_nonsyn_likelihoods[position][c] = 0.0;
+      for (nucleotide nuc = 0; nuc < 4; nuc++)
+	if (! synonymous (inherit_nuc (c, nuc, position), c))
+	  genetic_code_nonsyn_likelihoods[position][c] += 1.0 / 3.0;
+    }
+}
+\end{ccode}
+
+    \subsection{Codon Sets}
+      \label{sec:codon-sets}
+
+      During theta calculations, we maintain a set of the codons that have
+      appeared in a column. Since the number of codons is constant, there is a
+      shortcut that can be taken to optimize the code. By defining a codon set
+      as a 64-bit integer, we can use number-theoretic operations to yield
+      extremely fast and compact code. An element is a member of the set if the
+      bit with that element’s index is set to a 1. This representation allows a
+      convenient way to count the number of elements in a set with relatively
+      few operations. We retrieve the values of all bits whose significance is 1
+      modulo 63, then those that are 2 modulo 63, etc.\ until all bits are
+      accounted for. (For convenience, we split the number into its two 32-bit
+	  halves and then add the halves together after separation.) Taking the
+      whole number modulo 63 gives the number of ones that were present in the
+      original quantity. The bit masks used are these:
+
+      \begin{align*}
+        01000001000001000001000001000001 & = 0x41041041 \\ %
+        10000010000010000010000010000010 & = 0x82082082 \\ %
+        00000100000100000100000100000100 & = 0x04104104 \\ %
+        00001000001000001000001000001000 & = 0x08208208 \\ %
+        00010000010000010000010000010000 & = 0x10410410 \\ %
+        00100000100000100000100000100000 & = 0x20820820
+      \end{align*}
+
+      Next, we must also ascertain whether a set containing exactly two codons
+      represents a singleton difference for Nei-Gojobori calculations. This
+      means that the two codons must differ by exactly one nucleotide. An
+      efficient way to test this is to reconstruct the bits that make up their
+      numerical value by taking binary masks over the codon set. If they fall
+      into the same mask, then they are the same; otherwise, they differ.
+
+      Specifically, suppose we have a set that looks like this:
+
+      \begin{center}
+        $0000 \cdots 0001001$
+      \end{center}
+
+      \noindent This indicates that codons 0 and 3 are in the set (we go from
+	  right to left). To determine whether the two least-significant bits
+      of the codons are the same, we take four bitmasks:
+
+      \begin{align*}
+        0001 \cdots & = 0x11111111 \\ %
+        0010 \cdots & = 0x22222222 \\ %
+        0100 \cdots & = 0x44444444 \\ %
+        1000 \cdots & = 0x88888888
+      \end{align*}
+
+      A change occurred in the lower-order two bits iff two of these masks re-
+      turned nonzero values when anded with the set. Similarly, we can determine
+      whether a change occurred within the two middle bits by these four
+      bitmasks:
+
+      \begin{align*}
+        0000000000001111 \cdots & = 0x000f000f \\ %
+        0000000011110000 \cdots & = 0x00f000f0 \\ %
+        0000111100000000 \cdots & = 0x0f000f00 \\ %
+        1111000000000000 \cdots & = 0xf000f000
+      \end{align*}
+
+      The same criterion may be reused for the first nucleotide. Lastly, we must
+      determine whether the codons differ in their most-significant bits by
+      breaking the 64-bit set into four 16-bit regions. We use these four
+      bitmasks for this:
+
+      \begin{align*}
+	1^{16}0^{48} 		& = 0xffff000000000000 \\ %
+	0^{16}1^{16}0^{32}	& = 0x0000ffff00000000 \\ %
+	0^{32}1^{16}0^{16}	& = 0x00000000ffff0000 \\ %
+	0^{48}1^{16}		& = 0x000000000000ffff
+      \end{align*}
+
+\begin{ccode}
+inline codon_set codon_set_add (codon_set s, codon c)
+  {return s | (0x1ull << _idx(c));}
+
+inline bool codon_set_member (codon_set s, codon c)
+  {return !! (s & (0x1ull << _idx(c)));}
+
+inline codon_set codon_set_union (codon_set s1, codon_set s2)
+  {return s1 | s2;}
+
+inline codon_set codon_set_count_half (codon_set _s) {
+  return ( _s & 0x41041041ull) +
+         ((_s & 0x82082082ull) >> 1) +
+         ((_s & 0x04104104ull) >> 2) +
+         ((_s & 0x08208208ull) >> 3) +
+         ((_s & 0x10410410ull) >> 4) +
+         ((_s & 0x20820820ull) >> 5);
+}
+
+inline unsigned int codon_set_count (codon_set s) {
+  // Count by halves. This code uses a mod-31 algorithm described in the
+  // writeup.
+  return codon_set_count_half ((s >> 32) & 0xffffffffull) % 63 +
+       codon_set_count_half (s & 0xffffffffull) % 63;
+}
+
+inline bool changes_in_group (codon_set a, codon_set b, codon_set c, codon_set d) {
+  // If a, b, c, and d are bitmasks, then this method returns true if all of the
+  // bitmasks but one are zero. In the function codon_set_singleton, this has
+  // the effect of determining whether all of the set bits belong to the same
+  // bitgroup.
+  return ! ((a == 0 && b == 0 && c == 0) ||
+            (a == 0 && b == 0 && d == 0) ||
+            (a == 0 && c == 0 && d == 0) ||
+            (b == 0 && c == 0 && d == 0));
+}
+
+inline int codon_set_singleton (codon_set s) {
+  // Returns -1 if the set is not a singleton, and 0, 1, or 2 if the set is a
+  // singleton. The 0, 1, or 2 will indicate whether the least significant,
+  // middle, or most significant nucleotide changed, respectively.
+  // Check the two lower nucleotides first.
+  codon_set _s = ((s >> 32) & 0xfffffffful) | (s & 0xfffffffful);
+  bool c0 = changes_in_group (_s & 0x11111111ull,
+                        _s & 0x22222222ull,
+                        _s & 0x44444444ull,
+                        _s & 0x88888888ull);
+  bool c1 = changes_in_group (_s & 0x000f000full,
+                        _s & 0x00f000f0ull,
+                        _s & 0x0f000f00ull,
+                        _s & 0xf000f000ull);
+  if (c0 && c1)
+    return -1;
+  else {
+    bool c2 = changes_in_group (s & 0xffff000000000000ull,
+				s & 0x0000ffff00000000ull,
+				s & 0x00000000ffff0000ull,
+				s & 0x000000000000ffffull);
+    if (c2 && (c1 || c0))
+      return -1;
+    else if (c0)
+      return 0;
+    else if (c1)
+      return 1;
+    else
+      return 2;
+  }
+}
+\end{ccode}
+
+      Here’s where it gets even scarier. We want to determine whether a set of
+      codons is synonymous or nonsynonymous. Specifically, do the codons in the
+      set code for exactly one amino acid or more than one? To do this with the
+      minimal number of operations requires bitmasks, which we use below. The
+      guiding idea is that there are a lot of patterns in the genetic code, and
+      by exploiting those we can handle many cases at once. Later I’ll write up
+      the actual process for deriving the hexadecimal numbers that appear here.
+
+\begin{ccode}
+inline bool codon_set_inside (codon_set s, codon_set mask)
+  {return s == (s & mask);}
+
+inline bool exactly_one (bool a, bool b, bool c, bool d) {
+  return ! ((a && b) || (a && c) || (a && d) ||
+          (b && c) || (b && d) || (c && d));
+}
+
+inline bool codon_set_synonymous (codon_set s) {
+  // Determines whether exactly two codons in a codon set are synonymous with
+  // one another.
+  if (codon_set_inside (s, 0x00f000f000f000f0ull))
+    return codon_set_inside (s, 0x00f0000000000000ull) ||
+	   codon_set_inside (s, 0x000000f000000000ull) ||
+	   codon_set_inside (s, 0x0000000000f00000ull) ||
+	   codon_set_inside (s, 0x00000000000000f0ull);
+
+  if (codon_set_inside (s, 0xf00f0000f00f0000ull))
+    return codon_set_inside (s, 0xf000000000000000ull) ||
+	   codon_set_inside (s, 0x000f000000000000ull) ||
+	   codon_set_inside (s, 0x00000000f0000000ull) ||
+	   codon_set_inside (s, 0x00000000000f0000ull);
+
+  if (codon_set_inside (s, 0x0300030003000300ull) !=
+      codon_set_inside (s, 0x0c000c000c000c00ull))
+    return codon_set_inside (s, 0x0f00000000000000ull) ||
+	   codon_set_inside (s, 0x00000f0000000000ull) ||
+	   codon_set_inside (s, 0x000000000f000000ull) ||
+	   codon_set_inside (s, 0x0000000000000f00ull);
+
+  // Handle cases where only single-coding values are present. Since we assume
+  // that multiple distinct values are present in this codon set, if an amino
+  // acid that has only one coding option is found, then the set must be
+  // nonsynonymous.
+  if (codon_set_inside (s, 0x0000000800008000ull))
+    return FALSE;
+
+  // Below are the more irregular cases. These include the bridging of serine,
+  // leucine, and arginine across groups, and rows containing just one deviant,
+  // such as isoleucine-methionine at the beginning of the third group.
+  return  codon_set_inside (s, 0x0000000000004c00ull) ||
+	  codon_set_inside (s, 0x00000000000f000cull) ||
+	  codon_set_inside (s, 0x0000c000f0000000ull) ||
+	  codon_set_inside (s, 0x00003000000000f0ull) ||
+	  codon_set_inside (s, 0x0000000700000000ull) ||
+	  codon_set_inside (s, 0x0000000000000003ull) ||
+	  codon_set_inside (s, 0x0000000000003000ull);
+}
+\end{ccode}
+
+      We also will need to know which codons changed. The simplest format for
+      this is to return the codon mask that would be returned when comparing two
+      individual codons.
+
+\begin{ccode}
+inline codon codon_set_mask (codon_set s) {
+  codon result = 0;
+  if (! (codon_set_inside (s, 0xffff000000000000ull) ||
+         codon_set_inside (s, 0x0000ffff00000000ull) ||
+         codon_set_inside (s, 0x00000000ffff0000ull) ||
+         codon_set_inside (s, 0x000000000000ffffull)))
+    result |= 0x10;
+
+  if (! (codon_set_inside (s, 0xf000f000f000f000ull) ||
+         codon_set_inside (s, 0x0f000f000f000f00ull) ||
+         codon_set_inside (s, 0x00f000f000f000f0ull) ||
+         codon_set_inside (s, 0x000f000f000f000full)))
+    result |= 0x4;
+
+  if (! (codon_set_inside (s, 0x8888888888888888ull) ||
+         codon_set_inside (s, 0x4444444444444444ull) ||
+         codon_set_inside (s, 0x2222222222222222ull) ||
+         codon_set_inside (s, 0x1111111111111111ull)))
+    result |= 0x1;
+
+  return result;
+}
+\end{ccode}
+
+    \subsection{Sequences}
+      \label{sec:sequences}
+      
+      A sequence is an array of codons. We define a sequence and some methods
+      for sequences in general here. We also define the notion of a population,
+      which is an array of sequences. In practice, we use hierarchical
+      structures to represent these, since we want access to the size of the
+      data as well as the data itself. Recombination involves splicing two
+      sequence pieces together somehow. Since a recombination split point can be
+      within a single codon, we have these three scenarios:
+
+      \begin{enumerate}
+	\item The split point is a nucleotide 0 within a codon, or between
+	codons. Then the nucleotides whose indices are strictly less than the
+	split point come from sequence 1, and all others come from sequence 2.
+
+	\item The split point is at nucleotide 1, or after the first nucleotide
+	in the codon. Then the first nucleotide of the codon after the split
+	point is from sequence 1, and all after it are from sequence 2. To get
+	the intermediate codon, we simply inherit nucleotide 2 from the codon in
+	sequence 1.
+
+	\item The split point is at nucleotide 2, or after the second nucleotide
+	of the codon. To get the intermediate codon, we inherit nucleotide 0
+	from the codon in sequence 2.
+      \end{enumerate}
+
+\begin{ccode}
+inline sequence *copy_sequence (sequence *source, sequence *dest) {
+  // This function is called a lot, so any optimizations here are going to make
+  // a big difference. We use memcpy to copy the actual data, since that is
+  // going to be the fastest way to copy a continuous segment of memory.
+  ensure_sequence (dest, source->length);
+  memcpy (dest->data, source->data, source->length * sizeof (codon));
+  return dest;
+}
+
+inline sequence *recombine_sequences (sequence *s1, sequence *s2, sequence *dest,
+				      unsigned int nucleotide_index) {
+  unsigned int ci = nucleotide_index / 3;
+  unsigned int ni = nucleotide_index % 3;
+
+  ensure_sequence (dest, s2->length);
+
+  // Copy in the codons from the first sequence.
+  memcpy (dest->data, s1->data, sizeof (codon) * ci);
+
+  // During the split, copy the partial codon.
+  if (ni == 0)
+    dest->data[ci] = s1->data[ci];
+  else
+    dest->data[ci] = (ni == 1) ? inherit (s2->data[ci], s1->data[ci], 2) :
+				 inherit (s1->data[ci], s2->data[ci], 0);
+
+  // Copy the rest.
+  memcpy (dest->data + ci + 1, s2->data + ci + 1, sizeof (codon) * (s2->length - (ci + 1)));
+  return dest;
+}
+\end{ccode}
+
+      Sometimes it’s necessary to create a sequence from a string of nucleotide
+      letters. The read_sequence function does exactly that, and returns a
+      pointer to the newly allocated sequence. The string parameter may contain
+      spaces. All unrecognized characters (i.e.\ anything not an A, C, G, T, or
+	  U) are ignored.
+
+\begin{ccode}
+inline void set_nucleotide_at_position (sequence *s, nucleotide n, unsigned int position) {
+  // Position is the position in nucleotides, not codons.
+  s->data[position / 3] = inherit_nuc (s->data[position / 3], n, 2 - (position % 3));
+}
+
+sequence *read_sequence (const char *input) {
+  unsigned int position = 0; // In nucleotides, not codons.
+  unsigned int l   	= 0;
+  sequence *result 	= create_sequence ();
+
+  for (unsigned int i = 0; i < strlen (input); i++)
+    if (input[i] == ’A’ || input[i] == ’C’ || input[i] == ’G’ ||
+	input[i] == ’T’ || input[i] == ’U’)
+      l++;
+
+  ensure_sequence (result, l / 3);
+
+  for (unsigned int i = 0; i < l / 3; i++)
+    result->data[i] = 0;
+
+  for (unsigned int i = 0; i < strlen (input); i++)
+    switch (input[i]) {
+      case ’A’: set_nucleotide_at_position (result, _a, position++); break;
+      case ’C’: set_nucleotide_at_position (result, _c, position++); break;
+      case ’G’: set_nucleotide_at_position (result, _g, position++); break;
+      case ’T’:
+      case ’U’: set_nucleotide_at_position (result, _u, position++); break;
+    }
+
+  return result;
+}
+\end{ccode}
+
+  \section{Populations}
+    \label{sec:populations}
+
+    Populations are indexed collections of sequences. We work mainly with
+    populations, so we define several functions that take a population and
+    return given results.
+
+    \subsection{Selective Fitness}
+
+      Natural selection prefers some individuals to others for reproductive
+      fitness.  Thus some individuals are more likely to be parents than others,
+      and that bias is reflected by assigning a coefficient to each individual
+      within a population.  When we consider the fitness coefficients of all of
+      the individuals, then we have a fitness vector, keyed just as the
+      individuals are.
+
+      While the population functions provide the ability to compute the
+      fitnesses of each individual, they do not make decisions about parentage.
+      This is to facilitate options such as using an isolation matrix, which is
+      implemented later.
+
+      Fitness vectors have one important peculiarity, and that is that they are
+      stored cumulatively. So a fitness vector of all ones would look like
+      $\langle 1, 2, 3, 4, \cdots, n \rangle$. The reason for this is to enable
+      a binary search instead of a linear one for parent selection. For a
+      population size of 500, this makes it about 25 times faster.
+      Algorithmically speaking, it makes a neutral model run $O(n \log n)$
+      instead of $O(n^2)$. The fitness vector structure is defined in section
+      \ref{sec:structure-definitions}.
+
+\begin{ccode}
+#define __fitness_vector_binary_operation__(function_name, op) \
+inline fitness_vector *function_name (fitness_vector *v1, fitness_vector *v2, \
+				      fitness_vector *dest) { \
+  double last_1 = 0.0; \
+  double last_2 = 0.0; \
+  ensure_fitness_vector (dest, v1->length); \
+  for (unsigned int i = 0; i < v1->length; i++) { \
+   dest->data[i] = (v1->data[i] - last_1) op (v2->data[i] - last_2) + \
+     ((i > 0) ? dest->data[i - 1] : 0.0); \
+   last_1 = v1->data[i]; \
+   last_2 = v2->data[i]; \
+  } \
+  return dest; \
+}
+
+__fitness_vector_binary_operation__(fitness_vector_add, +)
+__fitness_vector_binary_operation__(fitness_vector_mul, *)
+
+inline double fitness_vector_magnitude (fitness_vector *v)
+  {return v->data[v->length - 1];}
+
+inline unsigned int choose_individual (double d, fitness_vector *v, population *p) {
+  // We assume that d is between 0 and 1. Choosing an individual involves
+  // computing the magnitude of v and scaling by that much.
+  // This function is O(n log n) in the size of the fitness vector, since a
+  // binary search is used.
+  if (v != NULL) {
+    // Binary-search the population.
+    double		point 	= d * fitness_vector_magnitude (v);
+    unsigned int	shift 	= (v->length / 4) | 1;
+    unsigned int	result 	= v->length / 2;
+
+    if (point == 0.0)
+      return 0;
+
+    while (TRUE) {
+      if (result >= v->length)	result = v->length - 1;
+      if (result < 0)		result = 0;
+
+      if (v->data[result] < point)
+	result += shift;
+      else if (result > 0 && v->data[result - 1] > point)
+	result -= shift;
+      else
+	return result;
+
+      shift = (shift / 2) | 1;
+    }
+  } else
+    // Simply choose a random element, since they all carry the same weight.
+    return random_integer () % p->length;
+}
+\end{ccode}
+
+    \subsection{Statistical Structure}
+      \label{sec:statistical-structure}
+
+      We compute a set of statistics for each population. Since we may wish to
+      add more information later, we encapsulate this information into a large
+      structure whose fields are filled in by several different methods.
+
+\begin{ccode}
+typedef struct {
+  unsigned int	n;     		// Number of sequences per population
+  unsigned int	pairwise;	// Number of pairwise computations = n(n-1)/2
+  double	ng_site[3];	// Nei/Gojobori ratios at each nucleotide site index
+  unsigned int	ng_size[3];	// Nei/Gojobori sample size at each site index
+  unsigned int	multis[3];	// Multiplitons at given positions
+  unsigned int	multiplitons;	// Total multiplitons
+
+  double	a1;		// Coefficients for variance calculation
+  double	a2;
+  double	b1;
+  double	b2;
+  double	c1;
+  double	c2;
+  double	e1;
+  double	e2;
+
+  double	ng_bias;
+  double	ng_var;
+  double	gl_bias;
+  double	gl_var;
+  double	rn_bias;
+  double	rn_var;
+
+  theta_array 	*site_syn;
+  theta_array 	*site_non;
+  theta_array 	*ng_syn;
+  theta_array 	*ng_non;
+  theta_array 	*gl_syn;
+  theta_array 	*gl_non;
+  theta_array 	*rn_syn;
+  theta_array 	*rn_non;
+
+  double	s_syn;		// Aggregate synonymity of segregating sites
+  double	s_non;		// # segregating sites - s_syn
+  double	pi_syn;		// Aggregate synonymity of pairwise differences
+  double	pi_non;		// # pairwise differences - pi_syn
+  double	theta_syn;	// s_syn / pairwise
+  double	theta_non;	// s_non / pairwise
+  double	d_syn;		// Tajima’s D statistic for synonymous differences
+  double	d_non;		// Ditto for nonsynonymous differences
+} statistics;
+
+void initialize_statistics (statistics *s) {
+  // The most important initialization to perform is that we need to make sure
+  // that the site_syn and site_non pointers refer to valid objects.
+  s->site_syn = create_theta_array ();
+  s->site_non = create_theta_array ();
+  s->ng_syn = create_theta_array   ();
+  s->ng_non = create_theta_array   ();
+  s->gl_syn = create_theta_array   ();
+  s->gl_non = create_theta_array   ();
+  s->rn_syn = create_theta_array   ();
+  s->rn_non = create_theta_array   ();
+}
+
+void delete_statistics (statistics *s) {
+  delete_theta_array (s->site_syn); free (s->site_syn); s->site_syn = NULL;
+  delete_theta_array (s->site_non); free (s->site_non); s->site_non = NULL;
+  delete_theta_array (s->ng_syn);   free (s->ng_syn);	s->ng_syn = NULL;
+  delete_theta_array (s->ng_non);   free (s->ng_non);	s->ng_non = NULL;
+  delete_theta_array (s->gl_syn);   free (s->gl_syn);	s->gl_syn = NULL;
+  delete_theta_array (s->gl_non);   free (s->gl_non);	s->gl_non = NULL;
+  delete_theta_array (s->rn_syn);   free (s->rn_syn);	s->rn_syn = NULL;
+  delete_theta_array (s->rn_non);   free (s->rn_non);	s->rn_non = NULL;
+}
+\end{ccode}
+
+    \subsection{Variance Coefficients}
+      \label{sec:variance-coefficients}
+
+      The variance coefficients used in Tajima's \D{} calculation are described
+      in the background literature. The formulas for the various constants are
+      implemented as follows:
+
+      \begin{align*}
+	a_1 & = \sum_{i=1}^{n-1} {1 \over i} \\ %
+	a_2 & = \sum_{i=1}^{n-1} {1 \over i^2} \\ %
+	b_1 & = {n + 1 \over 3(n - 1)} \\ %
+	b_2 & = 2 \cdot {n^2 + n + 3 \over 9n(n - 1)} \\ %
+	c_1 & = b_1 - {1 \over a_1} \\ %
+	c_2 & = b_2 - {n + 2 \over na_1} + {a_2 \over a_1^2} \\ %
+	e_1 & = {c_1 \over a_1} \\ %
+	e_2 & = {c_2 \over a_1^2 + a_2}
+      \end{align*}
+
+\begin{ccode}
+void compute_variance_coefficients (population *p, simulation_parameters *sp, statistics *result) {
+  // Populate the sample size and then compute the variance coefficients.
+  result->n 		= p->length;
+  result->pairwise	= result->n * (result->n - 1) / 2;
+  result->a1		= 0.0;
+  result->a2		= 0.0;
+
+  for (unsigned int i = 1; i < result->n; i++) {
+    result->a1 += 1.0 / (double) i;
+    result->a2 += 1.0 / (double) (i * i);
+  }
+
+  result->b1 = (double) (result->n + 1) / (3.0 * (double) (result->n - 1));
+  result->b2 = 2.0 * (double) (result->n * result->n + result->n + 3) /
+		     (double) (9 * result->n * (result->n - 1));
+
+  result->c1 = result->b1 - 1.0 / result->a1;
+  result->c2 = result->b2 -
+	       (double) (result->n + 2) / (result->a1 * (double) result->n) +
+	       result->a2 / (result->a1 * result->a1);
+
+  result->e1 = result->c1 / result->a1;
+  result->e2 = result->c2 / (result->a1 * result->a1 + result->a2);
+}
+\end{ccode}
+
+    \subsection{Nei and Gojobori Ratios}
+      \label{sec:nei-gojobori}
+
+      Using the Nei and Gojobori method, the likelihood of a change in a
+      particular nucleotide position being synonymous or nonsynonymous can be
+      estimated for a given population. Computing these ratios involves scanning
+      for codon loci within a population such that all of the codons across
+      sequences at that locus differ only once, called a singleton change. The
+      ratio of singleton changes whose effects are nonsynonymous to those whose
+      effects are synonymous is the Nei and Gojobori ratio for that nucleotide
+      index.
+
+      In practice, we need to know more than just the ratios because sometimes
+      the ratios will be based on many observations and sometimes they will be
+      based on just a few. The strength of the data plays a role in whether or
+      not it is used, and if it is used, how much weight it receives. The
+      alternative to using Nei and Gojobori data is using a combinatorial
+      estimate of how likely each nucleotide is to cause a change. This assumes
+      neutral nucleotide preference, which is often not true in nature.
+
+\begin{ccode}
+void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics *result) {
+  for (unsigned int i = 0; i < 3; i++) {
+    result->ng_site[i] = 0.0;
+    result->ng_size[i] = 0;
+  }
+
+  // Run through the data building codon sets and searching for singletons.
+  for (unsigned int i = 0; i < p->data[0].length; i++) {
+    codon_set cs = 0ull;
+    for (unsigned int j = 0; j < p->length; j++)
+      cs = codon_set_add (cs, p->data[j].data[i]);
+
+    // Check to see if it is a segregating singleton site. If not, then pass it up.
+    if (codon_set_count (cs) == 2) {
+      signed int singleton_position = codon_set_singleton (cs);
+      if (singleton_position != -1) {
+        // See the definition of codon_set_singleton if the usage of
+        // singleton_position looks peculiar.
+        result->ng_size[singleton_position]++;
+        if (! codon_set_synonymous (cs))
+         result->ng_site[singleton_position] += 1.0;
+      }
+    }
+  }
+
+  // Since the site data slots contain the number of nonsynonymous observations,
+  // all we need to do is divide by the total number of samples taken.
+  for (unsigned int i = 0; i < 3; i++)
+    if (result->ng_size[i] != 0)
+      result->ng_site[i] /= (double) result->ng_size[i];
+}
+\end{ccode}
+
+    \subsection{Theta Statistic}
+      \label{sec:theta-statistic}
+
+      Theta measures the proportion of sites that show variance. To do this, we
+      look at each codon locus across individuals and consider the set of
+      distinct values observed. If this set falls into the same equivalence
+      class of amino acid coding, then it is synonymous; otherwise, it is
+      nonsynonymous.
+
+      In practice, we establish a gradient that blurs this distinction somewhat.
+      If there is variance among a nucleotide site, then we add that site's
+      nonsynonymity value to the nonsynonymity of the site. (Correspondingly, we
+	  add the difference to 1 to the synonymity of the site).
+
+      \subsubsection{Estimator combination methods}
+	\label{sec:variance-minimization}
+
+	There are two ways to combine the Nei and Gojobori estimator $X$ and the
+	genetic likelihood estimator $Y$. Currently, we use a cutoff method by
+	default; for sufficiently small data sets ($n = 0$), we let our estimate
+	be $Y$; otherwise, we let the estimate be $X$. A proposed modification
+	of this method involves estimating the relative variances of $X$ and
+	$Y$, assuming that neither is biased, and solving for a linear
+	combination to minimize the combined variance. The derivation is below,
+	assuming that $cov(X, Y) = 0$:
+
+	\begin{align*}
+	  V(X)		& = {1 \over n} \\ %
+	  V(Y)		& = c \\ %
+	  a + b 	& = 1 \\ %
+	  V(aX + bY)	& = a^2 V(X) + b^2 V(Y)
+	\end{align*}
+
+	Minimizing the last equation involves zeroing the derivative:
+
+	\begin{align*}
+	  {d \over da} \left[{a^2 \over n} + (1 - a^2) c\right]
+	    & = {2a \over n} + (-2 + 2a) c \\ %
+	  0 & = {2a \over n} + (-2 + 2a) c \\ %
+	  c & = {a \over n} + 2ac \\ %
+	  a = {nc \over 1 + nc}
+	\end{align*}
+
+	Here, $n$ is the number of singleton instances in a given position, and
+	$c$ is the constant variance assumed of the genetic likelihood method.
+	The linear combination that minimizes error, assuming that each
+	estimator is unbiased, is:
+
+	$$ \left( {nc \over 1 + nc} \right) X + \left (1 - {\nc \over 1 +
+	    nc}\right) Y $$
+
+	When considering the value of the genetic likelihood estimator, we
+	average across all values that appear in a column.
+
+      \subsubsection{Codon ambiguity methods}
+	\label{sec:codon-ambiguity}
+
+	In the population given by sequences AAATTT, GACTTA, and CACTTA,
+	there is a Nei and Gojobori singleton at position 3. However, the first codon
+	is also variant at position 1, which has no Nei and Gojobori singleton. Dur-
+	ing the summer of 2007, three different ways of handling this situation were
+	documented. Two of them are these:
+
+	\begin{enumerate}
+	  \item Flag the first codon in its entirety as being ambiguous, since
+	  it has at least one nucleotide site that has no Nei and Gojobori data.
+	  Then use genetic likelihoods, averaged across all codon values in the
+	  first codon, on the first and third positions.
+
+	  \item Use the available Nei and Gojobori data on the third position of
+	  the first codon and use genetic likelihoods on the first position.
+	\end{enumerate}
+
+	We currently use option 2.
+
+\begin{ccode}
+inline codon_set theta_site_set (population *p, unsigned int ci) {
+  // Builds and returns the codon set constructed from codon site ci.
+  codon_set result = 0ull;
+  for (unsigned int i = 0; i < p->length; i++)
+    result = codon_set_add (result, _idx(p->data[i].data[ci]));
+  return result;
+}
+
+inline bool codon_set_multipliton (codon_set cs) {
+  // Returns true iff cs contains a multipliton.
+  return (codon_set_singleton (cs) == -1) && (codon_set_count (cs) > 2);
+}
+
+void compute_theta (population *p, simulation_parameters *sp, statistics *result) {
+  // Populates the theta portion of the statistics. Requires that Nei and
+  // Gojobori data already be calculated.
+  result->s_syn = result->s_non = 0.0;
+  ensure_theta_array (result->site_syn, p->data[0].length);
+  ensure_theta_array (result->site_non, p->data[0].length);
+
+  if (sp->full_tracing) {
+    ensure_theta_array (result->ng_syn, p->data[0].length);
+    ensure_theta_array (result->ng_non, p->data[0].length);
+    ensure_theta_array (result->gl_syn, p->data[0].length);
+    ensure_theta_array (result->gl_non, p->data[0].length);
+    ensure_theta_array (result->rn_syn, p->data[0].length);
+    ensure_theta_array (result->rn_non, p->data[0].length);
+  }
+
+  for (unsigned int i = 0; i < p->data[0].length; i++)
+    result->site_syn->data[i] = result->site_non->data[i] = 0.0;
+
+  for (unsigned int i = 0; i < 3; i++)
+    result->multis[i] = 0;
+
+  // Now go through the columns and compute theta.
+  for (unsigned int i = 0; i < p->data[0].length; i++) {
+    codon_set cs       	 = theta_site_set (p, i);
+    unsigned int cs_size = codon_set_count (cs);
+
+    if (sp->full_tracing) {
+      result->ng_non->data[i]   = 0.0;
+      result->ng_syn->data[i]   = 0.0;
+      result->gl_non->data[i]   = 0.0;
+      result->gl_syn->data[i]   = 0.0;
+      result->rn_non->data[i]   = 0.0;
+      result->rn_syn->data[i]   = 0.0;
+    }
+
+    // If the site segregates, then we compute theta for it. Otherwise, we pass
+    // it up.
+    if (cs_size == 2 && codon_set_singleton (cs) != -1) {
+      // It’s a singleton. In this case, it’s either synonymous or not.
+      if (codon_set_synonymous (cs))
+	result->site_syn->data[i] = 1.0;
+      else
+	result->site_non->data[i] = 1.0;
+    } else if (cs_size > 1) {
+      // Determine which nucleotides segregate.
+      codon set_mask = codon_set_mask (cs);
+      for (unsigned int j = 0; j < 3; j++)
+	if (set_mask & (1 << (j * 2))) {
+	  double nc        = sp->assumed_gl_variance * (double) result->ng_size[j];
+	  double ng_factor = (sp->assumed_gl_variance == 0.0) ?
+			     ((result->ng_size[j] > 0) ? 1.0 : 0.0) :
+			     nc / (1.0 + nc);
+	  double co_factor = 1.0 - ng_factor;
+	  double ng_est    = result->ng_site[j];
+	  double co_est    = 0.0;
+	  double non       = ng_factor * ng_est;
+
+	 // Count the occurrence of the multipliton.
+	 result->multis[j]++;
+
+	 if (co_factor > 0.0) {
+	   // Average out all of the combinatorial numbers for the given
+	   // codons. Weight by the frequency of each, so we actually get the
+	   // values from the population itself.
+	   double total = 0.0;
+	   for (unsigned int k = 0; k < p->length; k++)
+	     total += genetic_code_nonsyn_likelihoods[j][_idx(p->data[k].data[i])];
+	   co_est = total / (double) p->length;
+	   non += co_factor * co_est;
+	 }
+
+	 result->site_syn->data[i] += 1.0 - non;
+	 result->site_non->data[i] += non;
+
+	 if (sp->full_tracing) {
+	   result->ng_non->data[i]  += ng_est;
+	   result->ng_syn->data[i]  += 1.0 - ng_est;
+	   result->gl_non->data[i]  += co_est;
+	   result->gl_syn->data[i]  += 1.0 - co_est;
+	   result->rn_non->data[i]  += normalized_random ();
+	   result->rn_syn->data[i]  += 1.0 - result->rn_non->data[i];
+	 }
+       }
+    }
+    
+    result->s_syn += result->site_syn->data[i];
+    result->s_non += result->site_non->data[i];
+  }
+
+  // Divide by the correctional factor.
+  result->theta_syn = result->s_syn / result->a1;
+  result->theta_non = result->s_non / result->a1;
+}
+\end{ccode}
+
+    \subsection{Discrete Pathways}
+      \label{sec:pathways}
+
+      Our modification separates the synonymous from the nonsynonymous changes.
+      For singleton changes, it is a simple distinction; we simply check the
+      syn- onymity or nonsynonymity of the change. However, some changes are am-
+      biguous. For example, if AAA changes to CAC, did it change by first
+      mutating to CAA or by first mutating to AAC? We cannot find out, but we
+      can take the average of all of the possibilities by using discrete
+      estimation.
+
+\begin{ccode}
+inline double non_path_1 (codon _c1, codon _c2)
+  {return synonymous (_c1, _c2) ? 0.0 : 1.0;}
+
+inline double non_path_2 (codon _c1, codon i, codon _c2)
+  {return non_path_1 (_c1, i) + non_path_1 (i, _c2);}
+
+inline double non_path_3 (codon _c1, codon i1, codon i2, codon _c2)
+  {return non_path_2 (_c1, i1, i2) + non_path_1 (i2, _c2);}
+
+inline double discrete_pathways_nonsynonymity (codon c1, codon c2, simulation_parameters *sp) {
+  unsigned int nc = changes (c1, c2);
+  if (nc == 0) {
+    // No or three changes. We wouldn’t be calling this procedure if there
+    // weren’t any changes, so there must be three. (Actually, everything
+    // works for zero changes as well, but it’s a slow way to come up with
+    // zero changes.)
+    codon i11 = inherit (c1, c2, 0), i12 = inherit (i11, c2, 1);
+    codon i21 = inherit (c1, c2, 0), i22 = inherit (i21, c2, 2);
+    codon i31 = inherit (c1, c2, 1), i32 = inherit (i31, c2, 0);
+    codon i41 = inherit (c1, c2, 1), i42 = inherit (i41, c2, 2);
+    codon i51 = inherit (c1, c2, 2), i52 = inherit (i51, c2, 0);
+    codon i61 = inherit (c1, c2, 2), i62 = inherit (i61, c2, 1);
+
+    return (non_path_3 (c1, i11, i12, c2) + non_path_3 (c1, i21, i22, c2) +
+	    non_path_3 (c1, i31, i32, c2) + non_path_3 (c1, i41, i42, c2) +
+	    non_path_3 (c1, i51, i52, c2) + non_path_3 (c1, i61, i62, c2)) / 18.0;
+  } else if (nc == 1)
+    // One change.
+    return non_path_1 (c1, c2);
+  else {
+    // Two changes. In a way, this is the most tricky since we have to
+    // specifically exclude the configuration that doesn’t change anything.
+    codon i1 = inherit (c1, c2, 0);
+    codon i2 = inherit (c1, c2, 1);
+    codon i3 = inherit (c1, c2, 2);
+    return (((i1 != c1) ? non_path_2 (c1, i1, c2) : 0.0) +
+	    ((i2 != c1) ? non_path_2 (c1, i2, c2) : 0.0) +
+	    ((i3 != c1) ? non_path_2 (c1, i3, c2) : 0.0)) / 4.0;
+  }
+}
+\end{ccode}
+
+    \subsection{Pi Statistic}
+      \label{sec:pi-statistic}
+
+      The pi statistic gives the average amount of variation within each site,
+      averaged across sites. It is computed by counting the number of
+      differences within each codon locus across sequences and dividing by the
+      number of pairwise comparisons made.
+
+\begin{ccode}
+void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
+  // Fills in the pi computations of the statistical structure.
+  double multiplier = 1.0 / (double) result->pairwise;
+  result->pi_syn = result->pi_non = 0.0;
+
+  // Go through each site looking for codon differences. When we   find them, then
+  // we use discrete pathways. The loop indices are optimized to   maximize cache
+  // hits, since sequential data is often loaded into cache very   readily.
+  for (unsigned int s1 = 0; s1 < p->length - 1; s1++)
+    for (unsigned int s2 = s1 + 1; s2 < p->length; s2++)
+      for (unsigned int pos = 0; pos < p->data[0].length; pos++)
+	if (p->data[s1].data[pos] != p->data[s2].data[pos]) {
+	  // Count the difference.
+	  unsigned int	n_changes  = changes (p->data[s1].data[pos],  p->data[s2].data[pos]);
+	  double	non_factor = discrete_pathways_nonsynonymity (
+	    p->data[s1].data[pos], p->data[s2].data[pos], sp);
+
+	  if (n_changes == 0) n_changes = 3;
+
+	  result->pi_syn += (1.0 - non_factor) * (double) n_changes;
+	  result->pi_non += non_factor * (double) n_changes;
+	}
+
+  result->pi_syn *= multiplier;
+  result->pi_non *= multiplier;
+}
+\end{ccode}
+
+    \subsection{Tajima's D}
+      \label{sec:d-statistic}
+
+      Tajima's \D{} statistic is calculated after theta and pi are known. We use
+      the variance coefficients, pi, and theta for each component of \D{}.
+      Specifically,
+
+      \begin{align*}
+	D_{syn} & = {\pi_{syn} - \theta_{syn} \over
+		     \sqrt{e_1 s_{syn} + e_2 s_{syn} (s_{syn} - 1)}} \\ %
+	D_{non} & = {\pi_{non} - \theta_{non} \over
+		     \sqrt{e_1 s_{non} + e_2 s_{non} (s_{non} - 1)}}
+      \end{align*}
+
+      These formulas are implemented in the \verb|compute_d| function. We have
+      to watch out for divide-by-zero errors because $S_{syn}$ and $S_{non}$ are
+      sometimes zero, zeroing the whole denominator. We handle this by saying
+      that if either is zero, then \D{} is zero as well.
+
+\begin{ccode}
+void compute_d (population *p, simulation_parameters *sp, statistics *result) {
+  double denom_syn = sqrt (result->s_syn * result->e1 + result->e2 * result->s_syn *
+							(result->s_syn - 1.0));
+  if (denom_syn != 0.0)
+    result->d_syn = (result->pi_syn - result->theta_syn) / denom_syn;
+  else
+    result->d_syn = 0.0;
+
+  double denom_non = sqrt (result->s_non * result->e1 + result->e2 * result->s_non *
+							(result->s_non - 1.0));
+  if (denom_non != 0.0)
+    result->d_non = (result->pi_non - result->theta_non) / denom_non;
+  else
+    result->d_non = 0.0;
+}
+\end{ccode}
+
+    \subsection{Full Tracing}
+
+      Mutations are tracked as they occur during the simulation if the
+      \verb|full-tracing| directive is specified in the profile (see section
+	  \ref{sec:profiles}). A full trace of the evolutionary his- tory is
+      kept of all of the organisms, and to find the number of mutations we
+      backtrace the tree to find the MRCA (either by state or by descent),
+      totaling the synonymous and nonsynonymous mutations as we go. Then we
+      compare the actual numbers to the estimates given by genetic likelihoods,
+      Nei and Gojobori, and a random number generator to establish relative
+      biases.
+
+\begin{ccode}
+bool is_mrca_descent (bool *individuals_seen, unsigned int n) {
+  // If multiple individuals exist, then we’re not at a MRCA yet.
+  bool seen_one_yet = FALSE;
+
+  for (unsigned int i = 0; i < n; i++)
+    if (individuals_seen[i]) {
+      if (seen_one_yet)
+	return FALSE;
+      else
+	seen_one_yet = TRUE;
+    }
+
+  return TRUE;
+}
+
+bool is_mrca_state (bool *individuals_seen, unsigned int n, generation_history *h,
+		    unsigned int codon_index) {
+  // Find the first seen current codon state and make sure everything else lines
+  // up with it.
+  codon first_state = 0xff; // Anything > 128 means we haven’t seen anything yet.
+
+  for (unsigned int i = 0; i < n; i++)
+    if (individuals_seen[i]) {
+      if (first_state & 0x80)
+	first_state = h->data[i].data[codon_index].state_after_mutation;
+      else if (first_state != h->data[i].data[codon_index].state_after_mutation)
+	return FALSE;
+    }
+
+  return TRUE;
+}
+
+unsigned int history_total_mutations (individual_history_node *child) {
+  // Returns the total number of mutations that occurred from parent to child.
+  // Since each history node stores not only its own codon but the codon before
+  // mutation (whether that arises from recombination or otherwise is not
+  // relevant), we just compare those two codons to one another.
+  if (child->state_before_mutation == child->state_after_mutation)
+    return 0;
+  else {
+    unsigned int c = changes (child->state_before_mutation, child->state_after_mutation);
+    if (c == 0)
+      return 3;
+    else
+      return c;
+  }
+}
+
+unsigned int history_non_mutations (individual_history_node *child) {
+  // Returns the number of nonsynonymous mutations that occurred from parent to
+  // child. In case two or more mutations occurred within the same codon (in one
+  // generation), they are counted from left to right.
+  codon c1 = child->state_before_mutation;
+  codon c2 = child->state_after_mutation;
+
+  if (c1 == c2)
+    return 0;
+  else if (changes (c1, c2) == 1)
+    return synonymous (c1, c2) ? 1 : 0;
+  else {
+    // Assume all nucleotides are variant. This is OK because we count only
+    // nonsynonymous mutations. If a nucleotide was not variant, then the codon
+    // will be synonymous.
+    codon i1 = inherit (c1, c2, 2);
+    codon i2 = inherit (i1, c2, 1);
+    codon i3 = inherit (i2, c2, 0);
+    return !! synonymous (c1, i1) + !! synonymous (i1, i2) +
+	   !! synonymous (i2, i3) + !! synonymous (i3, c2);
+  }
+}
+
+unsigned long long int count_mutations (population *p, simulation_parameters *sp, bool by_state,
+					unsigned int codon_index) {
+  // Returns the number of nonsynonymous and the number of total mutations that
+  // have occurred since the MRCA of the population. The MRCA may be decided by
+  // state or by descent; if by_state is true, then state is used; otherwise,
+  // descent is used. This function assumes a maximum population size of
+  // sp->population_size, since the population is often from the sample and does
+  // not represent the entire evolving population. The result is encoded such
+  // that the number of non mutations occupies the high 32 bits and the total
+  // number of mutations occupies the low 32 bits.
+
+  bool        *individuals_seen 	= (bool*) malloc (sizeof (bool) * sp->population_size);
+  bool        *last_individuals_seen	= (bool*) malloc (sizeof (bool) * sp->population_size);
+  bool        *temp			= NULL;
+  unsigned int non_mutations		= 0;
+  unsigned int total_mutations		= 0;
+  unsigned int current_generation	= sp->generations - 1;
+
+  // Initialize to have seen only the individuals in the population.
+  for (unsigned int i = 0; i < sp->population_size; i++)
+    individuals_seen[i] = (i < p->length);
+
+  // Now backtrace until only one element in individuals_seen is set.
+  while (current_generation >= 0 &&
+        ! (by_state ?
+            is_mrca_state (individuals_seen, sp->population_size,
+			   sp->history->data + current_generation, codon_index) :
+            is_mrca_descent (individuals_seen, sp->population_size))) {
+
+    // Go back one generation. This means rounding up all of the parents and
+    // adding them to the last_individuals_seen array. Then we swap the two
+    // arrays and decrement the current generation.
+    for (unsigned int i = 0; i < sp->population_size; i++)
+      last_individuals_seen[i] = FALSE;
+
+    for (unsigned int i = 0; i < sp->population_size; i++)
+      if (individuals_seen[i]) {
+        individual_history *h = sp->history->data[current_generation].data + i;
+
+        // Find this guy’s parent(s) and mark them as having been seen.
+        last_individuals_seen[h->data[codon_index].parent_index] = TRUE;
+
+        if (h->data[codon_index].recombination_nucleotide != 0)
+          last_individuals_seen[h->data[codon_index].other_parent_index] = TRUE;
+
+        // Add this individual’s mutations to the totals.
+        non_mutations += history_non_mutations (h->data + codon_index);
+        total_mutations += history_total_mutations (h->data + codon_index);
+      }
+
+    // Now swap this and the last individuals seen, and then decrement the
+    // current generation.
+    temp = individuals_seen;
+    individuals_seen = last_individuals_seen;
+    last_individuals_seen = temp;
+    current_generation--;
+  }
+
+  return ((long long int) non_mutations << 32) | total_mutations;
+}
+
+void compute_tracked_changes (population *p, simulation_parameters *sp, statistics *result) {
+  // Here we go across codon sites and compare the actual traced nonsynonymity
+  // of multiplitons with the estimates made by Nei and Gojobori, genetic
+  // likelihoods, and random numbers.
+  result->ng_bias = result->ng_var = 0.0;
+  result->gl_bias = result->gl_var = 0.0;
+  result->rn_bias = result->rn_var = 0.0;
+  result->multiplitons = 0;
+  for (unsigned int ci = 0; ci < p->data[0].length; ci++)
+    if (codon_set_multipliton (theta_site_set (p, ci))) {
+      // Test the estimators here. We don’t test them on singleton sites at the
+      // moment, nor do we test our assumptions about homoplasy by investigating
+      // invariant sites.
+
+      unsigned long long int mutation_counts = count_mutations (p, sp, FALSE, ci);
+      unsigned int	     non_mutations   = mutation_counts >> 32;
+      unsigned int	     total_mutations = mutation_counts & 0xffffffffull;
+
+      if (total_mutations != 0) {
+        double actual_non = (double) non_mutations /
+			    (double) total_mutations;
+        double ng_error = result->ng_non->data[ci] - actual_non;
+        double gl_error = result->gl_non->data[ci] - actual_non;
+        double rn_error = result->rn_non->data[ci] - actual_non;
+        result->ng_bias += ng_error;
+        result->gl_bias += gl_error;
+        result->rn_bias += rn_error;
+        result->ng_var += ng_error * ng_error;
+        result->gl_var += gl_error * gl_error;
+        result->rn_var += rn_error * rn_error;
+
+        result->multiplitons++;
+      }
+    }
+
+  if (result->multiplitons > 1) {
+    // Variance is computed by dividing by n-1.
+    double variance_division_factor = 1.0 / ((double) result->multiplitons - 1.0);
+    result->ng_bias /= (double) result->multiplitons;
+    result->gl_bias /= (double) result->multiplitons;
+    result->rn_bias /= (double) result->multiplitons;
+    result->ng_var *= variance_division_factor;
+    result->gl_var *= variance_division_factor;
+    result->rn_var *= variance_division_factor;
+  }
+}
+\end{ccode}
+
+  \section{Simulation Runtime}
+
+    Simulation parameters (see section \ref{sec:simulation-parameters}) include
+    the initial population size, the ancestral sequence, HKY-85 parameters,
+    recombination rate, etc. Fitness func- tions take a population and the index
+    of a sequence and should return a double between 0 and 1 indicating the
+    relative fitness of that sequence.
+
+    By default, we assume the neutral model and add in selective or drift influ-
+    ences. An example of such an influence is purifying selection, where
+    individu- als who deviate from a predefined optimum are less fit. The next
+    step is to define the rules for mutation under the neutral model.  Mutation
+    is generally simple, as is recombination.
+    
+    \subsection{Mutation}
+    
+      We use the HKY-85 model to provide mutation likelihoods. Its parameter set
+      includes a general mutation rate, a transition/transversion ratio, and
+      relative frequencies of each of the four nucleotides. An important
+      shortcut can be taken for mutation simulation. Since the mutation rate per
+      nucleotide is fairly low, it is unlikely that a mutation will occur at
+      all. Instead of checking each site, we can quickly compute the probability
+      that we have no mutations and then check that condition. If it is false,
+      then we adjust all future probabilities accordingly.
+
+\begin{ccode}
+inline double nucleotide_probability (nucleotide n1, nucleotide n2, hky85_params *p) {
+  if (n1 == n2)
+    return 0.0;
+  else {
+    double k = p->transitions_per_transversion /
+	       (p->transitions_per_transversion + 1.0);
+    return (is_purine (n1) == is_purine (n2)) ? k : 1.0 - k;
+  }
+}
+
+inline void mutate_sequence (sequence *s, simulation_parameters *sp,
+			     unsigned int generation, unsigned int individual) {
+  hky85_params *p = &sp->mutation_parameters;
+  double given_probability = pow (1.0 - p->mutations_per_nucleotide, s->length * 3);
+
+  while (normalized_random () > given_probability) {
+    // A mutation actually occurs.
+    unsigned int position = random_integer () % (s->length * 3);
+
+    // When we get here, we are guaranteed a change.
+    nucleotide n     = pick (s->data[position / 3], position % 3);
+    nucleotide r     = n; // Resulting nucleotide
+    double pu        = p->u_frequency * nucleotide_probability (_u, n, p);
+    double pc        = p->c_frequency * nucleotide_probability (_c, n, p);
+    double pa        = p->a_frequency * nucleotide_probability (_a, n, p);
+    double pg        = p->g_frequency * nucleotide_probability (_g, n, p);
+    double selector  = normalized_random () * (pu + pc + pa + pg);
+
+    if (selector < pu)        	 	r = _u;
+    else if (selector < pu + pc)	r = _c;
+    else if (selector < pu + pc + pa)	r = _a;
+    else				r = _g;
+
+    codon new_codon = inherit_nuc (s->data[position / 3], r, position % 3);
+
+    if (sp->full_tracing)
+      // Record the new codon state in the appropriate slot.
+      // We explicitly don’t alter the original codon because its state is lost,
+      // and we need to track multiple mutations.
+      sp->history->data[generation].data[individual].data[position / 3].state_after_mutation = new_codon;
+
+    s->data[position / 3] = new_codon;
+  }
+}
+\end{ccode}
+
+    \subsection{Model Functions}
+
+      To simulate the effects of different evolutionary forces, we add bias to
+      our simulation through the use of these functions.
+
+      \subsubsection{Neutral model}
+
+	The neutral model is selected by default.
+
+      \subsubsection{Purifying selection}
+
+	Purifying selection begins with 1 and multiplies by a selection factor
+	for each amino acid difference between the individual and the optimum.
+	This function won't end up being expensive per invocation, but it will
+	be called $O(ng)$ times, where $n$ is the number of individuals in a
+	population and g is the number of generations. For that reason, any
+	optimizations available here are extremely valuable. (I am not aware of
+	    any possibilities for optimization at the moment.)
+
+\begin{ccode}
+inline double purifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
+  double	result          = 1.0;
+  double	drop_factor     = 1.0 - sp->purifying_selection_coefficient;
+  unsigned int	i            	= 0;
+
+  for (i = 0; i < p->data[idx].length; i++)
+    if (amino_lookup[(unsigned int) _idx(p->data[idx].data[i])] == sto ||
+	amino_lookup[(unsigned int) _idx(sp->purifying_optimal_sequence->data[i])] == sto)
+      break;
+    else if (! synonymous (p->data[idx].data[i], sp->purifying_optimal_sequence->data[i]))
+      result *= drop_factor;
+
+  // Take into account stop codons. Anything after the first stop codon is a
+  // difference.
+  if (i < p->data[idx].length)
+    result *= pow (drop_factor, p->data[idx].length - i);
+
+  return result;
+}
+\end{ccode}
+
+      \subsubsection{Diversifying selection}
+
+	Diversifying selection begins with 1 and multiplies by a selection
+	factor for each amino acid difference that the organism has at each
+	position. Then we divide by the number of other individuals.
+
+\begin{ccode}
+inline double diversifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
+  unsigned int differences = 0;
+  unsigned int stop_position = p->data[idx].length;
+
+  // Pre-locate the stop codon in the original sequence, if any. This
+  // accelerates the below loop.
+  for (unsigned int i = 0; i < p->data[idx].length; i++)
+    if (amino_lookup[_idx(p->data[idx].data[i])] == sto) {
+      stop_position = i;
+      break;
+    }
+
+  for (unsigned int i = 0; i < p->length; i++)
+    for (unsigned int j = 0; j < stop_position; j++)
+      if (amino_lookup[_idx(p->data[i].data[j])] == sto)
+	// No further differences to take into account, so stop comparing
+	// against this individual.
+	break;
+      else if (! synonymous (p->data[i].data[j], p->data[idx].data[j]))
+	differences++;
+
+  return (double) differences / (double) (p->length - 1);
+}
+\end{ccode}
+
+      \subsubsection{Sharp population bottlenecks}
+
+	We temporarily create a crash in the population during a bottleneck.
+	This means creating an isolation matrix that has an upper-left square of
+	ones for a time, then restoring the matrix to all ones.
+
+\begin{ccode}
+inline double sharp_population_bottleneck (
+    unsigned int generation, unsigned int parent_idx,
+    unsigned int child_idx, simulation_parameters *sp) {
+  if (generation >= sp->sharp_bottleneck_start &&
+      generation < sp->sharp_bottleneck_start + sp->sharp_bottleneck_duration &&
+      (parent_idx > sp->sharp_bottleneck_size ||
+       child_idx > sp->sharp_bottleneck_size))
+    // This interaction is subject to a bottleneck.
+    return 0.0;
+  else
+    // The bottleneck is not in effect.
+    return 1.0;
+}
+\end{ccode}
+
+      \subsubsection{Even population subdivision}
+
+	For even subdivision, we temporarily partition the population into
+	evenly sized groups (minus the fact that the group size might not evenly
+	    divide the population size), and then reunite them after some time.
+	This means creating a matrix with multiple squares of ones along the
+	primary diagonal, and everything else zero.
+
+\begin{ccode}
+inline double even_population_subdivision (
+    unsigned int generation, unsigned int parent_idx,
+    unsigned int child_idx, simulation_parameters *sp) {
+  unsigned int denom = sp->population_size / sp->even_subdivision_size;
+  if (generation >= sp->even_subdivision_start &&
+      generation < sp->even_subdivision_start + sp->even_subdivision_duration &&
+      parent_idx / denom != child_idx / denom)
+    return 0.0;
+  else
+    return 1.0;
+}
+\end{ccode}
+
+    \subsection{Parent Selection and Recombination}
+
+      We cannot modify the population in-place, so we actually have two separate
+      populations. The first represents the parent generation and the second
+      represents the child generation. This function also performs mutation on
+      each child sequence.
+
+\begin{ccode}
+inline void populate_parent_fitness (population *parents, simulation_parameters *sp) {
+  // Creates the vector for the parents’ fitnesses and stores it in sp.
+  for (unsigned int i = 0; i < parents->length; i++) {
+    double current;
+
+    switch (sp->selection_model) {
+      case PURIFYING_SELECTION:
+	current = purifying_selection (parents, i, sp);
+	break;
+      default:
+	fprintf (stderr, "Internal error: Selection model %d does not exist.\n", sp->selection_model);
+	exit (EXIT_FAILURE);
+    }
+
+    sp->parent_fitness_vector->data[i] = current +
+      ((i > 0) ? sp->parent_fitness_vector->data[i - 1] : 0.0);
+  }
+}
+
+inline void consider_drift_on_fitness (population *parents, unsigned int generation,
+				       unsigned int child_index, simulation_parameters *sp) {
+  // Multiplies drift into the resulting fitness vector.
+  if (sp->drift_model != NEUTRAL_DRIFT) {
+    for (unsigned int i = 0; i < parents->length; i++) {
+      double current;
+
+      switch (sp->drift_model) {
+        case SHARP_BOTTLENECK_DRIFT:
+	  current = sharp_population_bottleneck (generation, i, child_index, sp);
+	  break;
+        case EVEN_SUBDIVISION_DRIFT:
+	  current = even_population_subdivision (generation, i, child_index, sp);
+	  break;
+        default:
+	  fprintf (stderr, "Internal error: Drift model %d does not exist.\n", sp->drift_model);
+	  exit (EXIT_FAILURE);
+      }
+
+      sp->child_fitness_vector->data[i] = current +
+        ((i > 0) ? sp->child_fitness_vector->data[i - 1] : 0.0);
+    }
+
+    fitness_vector_mul (sp->parent_fitness_vector, sp->child_fitness_vector,
+                    sp->result_fitness_vector);
+  }
+}
+inline void do_trace_recombination (unsigned int split_point, unsigned int generation,
+				    unsigned int child_index, unsigned int p1, unsigned int p2,
+				    population *parents, population *children,
+				    simulation_parameters *sp) {
+  // Fills in the history for the given individual based on the fact that a
+  // recombination event occurred.
+  if (sp->full_tracing) {
+    // Inherit a bunch of codon histories from parent 1 and parent 2.
+    for (unsigned int i = 0; i < split_point / 3; i++) {
+      individual_history_node *n =
+        sp->history->data[generation].data[child_index].data + i;
+      n->parent_index = p1;
+      n->recombination_nucleotide = 0;
+      n->other_parent_index = 0xfffffffful;
+      n->state_before_mutation = n->state_after_mutation =
+        parents->data[p1].data[i];
+    }
+
+    for (unsigned int i = split_point / 3 + 1; i < parents->data[p1].length; i++) {
+      individual_history_node *n =
+        sp->history->data[generation].data[child_index].data + i;
+      n->parent_index = p2;
+      n->recombination_nucleotide = 0;
+      n->other_parent_index = 0xfffffffful;
+      n->state_before_mutation = n->state_after_mutation =
+        parents->data[p2].data[i];
+    }
+
+    // Now handle the mixed case.
+    individual_history_node *n =
+      sp->history->data[generation].data[child_index].data + split_point / 3;
+    n->parent_index = p1;
+    n->recombination_nucleotide = (split_point % 3) ? split_point % 3 : 3;
+    n->other_parent_index = p2;
+    n->state_before_mutation = n->state_after_mutation =
+      children->data[child_index].data[split_point / 3];
+  }
+}
+
+inline void do_trace_inheritance (unsigned int child_index, unsigned int parent_index,
+				  unsigned int generation, population *children,
+				  simulation_parameters *sp) {
+  // Fills in the history for an individual based on the fact that normal
+  // inheritance occurred.
+  if (sp->full_tracing)
+    // Trace the individual. If this is the first generation, then every
+    // individual came from individual 0.
+    for (unsigned int i = 0; i < children->data[child_index].length; i++) {
+      individual_history_node *n = sp->history->data[generation].data[child_index].data + i;
+      n->parent_index = parent_index;
+      n->recombination_nucleotide = 0;
+      n->other_parent_index = 0xfffffffful;
+      n->state_before_mutation = n->state_after_mutation =
+       children->data[child_index].data[i];
+    }
+}
+
+inline void perform_inheritance (population *parents, population *children,
+				 unsigned int child_index, unsigned int generation,
+				 fitness_vector *parent_fitness,
+				 simulation_parameters *sp) {
+  // Inherits from either one or two parents, as appropriate.
+  if (normalized_random () < sp->recombination_rate) {
+    // Perform a recombination. This means that we choose two distinct parents
+    // at random.
+    unsigned int parent_1 = choose_individual (normalized_random (), parent_fitness, parents);
+    unsigned int parent_2 = parent_1;
+
+    // In theory, this never has to be false; however, in practice we can
+    // choose one or two and it should almost always happen.
+    while (parent_2 == parent_1)
+      parent_2 = choose_individual (normalized_random (), parent_fitness, parents);
+
+    unsigned int split_point = (int)
+      (normalized_random () * parents->data[parent_1].length * 3);
+
+    recombine_sequences (parents->data + parent_1,
+			 parents->data + parent_2,
+			 children->data + child_index,
+			 split_point);
+
+    do_trace_recombination (split_point, generation, child_index, parent_1,
+			    parent_2, parents, children, sp);
+  } else {
+    unsigned int parent_index = choose_individual (normalized_random (), parent_fitness, parents);
+    copy_sequence (parents->data + parent_index, children->data + child_index);
+    do_trace_inheritance (child_index, parent_index, generation, children, sp);
+  }
+}
+
+inline void choose_parents (population *parents, population *children,
+                      simulation_parameters *sp, unsigned int generation) {
+  // Run through the population and recombine where necessary, performing simple
+  // redirection where possible. There may be places where time could be saved
+  // by pointer shuffling rather than data copies, but I’m not seeing them yet.
+  fitness_vector *resulting_vector = sp->parent_fitness_vector;
+
+  // First, compute the fitness vector for the parents.
+  if (sp->selection_model != NEUTRAL_SELECTION)
+    populate_parent_fitness (parents, sp);
+  else if (sp->drift_model == NEUTRAL_DRIFT)
+    resulting_vector = NULL; // A complete neutral model, so no biasing.
+  else
+    // No selection, so assume neutral fitness.
+    for (unsigned int i = 0; i < parents->length; i++)
+      sp->parent_fitness_vector->data[i] = (double) (i + 1);
+
+  if (sp->drift_model != NEUTRAL_DRIFT)
+    resulting_vector = sp->result_fitness_vector;
+
+  for (unsigned int i = 0; i < children->length; i++) {
+    consider_drift_on_fitness (parents, generation, i, sp);
+    perform_inheritance (parents, children, i, generation, resulting_vector, sp);
+    // Now mutate the child sequence.
+    mutate_sequence (children->data + i, sp, generation, i);
+  }
+}
+\end{ccode}
+
+    \subsection{Runtime Functions}
+
+      The runtime requirements are fairly straightforward. Primarily, we need to
+      instantiate a set of simulation parameters (which involves defining the
+	  appropriate functions for selection and drift) and allocate and then
+      free two populations. Then we need to perform statistical analysis on the
+      results and print those to \verb|stdout|.
+
+      \subsubsection{Printing}
+
+	Sequences and statistical output need to be formatted as CSV data. We do
+	this with two functions, \verb|print_sequences| and
+	\verb|print_d_values|. Also, progress needs to be printed as the
+	simulation runs. We achieve this with the print_trial_indicator
+	function, which prints both to standard output and standard error.
+
+\begin{ccode}
+void print_sequences (population *p, simulation_parameters *sp) {
+  // Prints out the sample of 20 sequences that was used for statistical
+  // calculations. To be consistent, we just use the first 20. This is valid
+  // because random sequences are chosen at each step.
+
+  const char *nucleotides = "TCAG";
+
+  for (unsigned int i = 0; i < sp->sample_size; i++) {
+    printf ("Sequence %d of %d:, ", i + 1, sp->sample_size);
+    for (unsigned int j = 0; j < p->data[i].length; j++)
+      printf ("%c%c%c", nucleotides[pick (p->data[i].data[j], 2)],
+			nucleotides[pick (p->data[i].data[j], 1)],
+			nucleotides[pick (p->data[i].data[j], 0)]);
+    printf ("\n");
+  }
+}
+
+void print_d_values (population *p, simulation_parameters *sp) {
+  // Since the population is completely shuffled, we take the first n
+  // individuals. The simplest way to do this is to cheat a little bit: We don’t
+  // actually need to allocate any new memory. Instead, we just modify the
+  // length attribute of the population and then change it back.
+
+  unsigned int old_length = p->length;
+  p->length = sp->sample_size;
+
+  statistics s;
+  initialize_statistics 	(&s);
+  compute_variance_coefficients (p, sp, &s);
+  compute_nei_gojobori   	(p, sp, &s);
+  compute_theta          	(p, sp, &s);
+  compute_pi             	(p, sp, &s);
+  compute_d              	(p, sp, &s);
+
+  if (sp->full_tracing) {
+    compute_tracked_changes 	(p, sp, &s);
+    // Prints out in this format:
+    // d_syn, d_non, pi_syn, pi_non, theta_syn, theta_non, s_syn, s_non,
+    // n, pairwise, a1, a2, b1, b2, c1, c2, e1, e2, ng_site[0], ng_site[1],
+    // ng_site[2], ng_size[0], ng_size[1], ng_size[2], multis[0], multis[1],
+    // multis[2], p0syn, p0non, p2syn, p2non, ng_bias[0], ng_var[0], ng_bias[2],
+    // ng_var[2], gl_bias[0], gl_var[0], gl_bias[2], gl_var[2], rn_bias[0],
+    // rn_var[0], rn_bias[2], rn_var[2]
+    printf ("%f, %f, %f, %f, %f, %f, %f, %f, %d, %d, %f, %f, %f, %f, %f, %f, "
+	    "%f, %f, %f, %f, %f, %d, %d, %d, %d, %d, %d, %f, %f, %f, %f, %f, "
+	    "%f\n",
+	    s.d_syn, s.d_non, s.pi_syn, s.pi_non, s.theta_syn, s.theta_non,
+	    s.s_syn, s.s_non, s.n, s.pairwise, s.a1, s.a2, s.b1, s.b2, s.c1,
+	    s.c2, s.e1, s.e2, s.ng_site[0], s.ng_site[1], s.ng_site[2],
+	    s.ng_size[0], s.ng_size[1], s.ng_size[2], s.multis[0], s.multis[1],
+	    s.multis[2], s.ng_bias, s.ng_var, s.gl_bias, s.gl_var, s.rn_bias,
+	    s.rn_var);
+  } else {
+    // Prints out in this format:
+    // d_syn, d_non, pi_syn, pi_non, theta_syn, theta_non, s_syn, s_non,
+    // n, pairwise, a1, a2, b1, b2, c1, c2, e1, e2, ng_site[0], ng_site[1],
+    // ng_site[2], ng_size[0], ng_size[1], ng_size[2], multis[0], multis[1],
+    // multis[2]
+    printf ("%f, %f, %f, %f, %f, %f, %f, %f, %d, %d, %f, %f, %f, %f, %f, %f, "
+	    "%f, %f, %f, %f, %f, %d, %d, %d, %d, %d, %d\n",
+	    s.d_syn, s.d_non, s.pi_syn, s.pi_non, s.theta_syn, s.theta_non,
+	    s.s_syn, s.s_non, s.n, s.pairwise, s.a1, s.a2, s.b1, s.b2, s.c1,
+	    s.c2, s.e1, s.e2, s.ng_site[0], s.ng_site[1], s.ng_site[2],
+	    s.ng_size[0], s.ng_size[1], s.ng_size[2], s.multis[0], s.multis[1],
+	    s.multis[2]);
+  }
+
+  delete_statistics (&s);
+  p->length = old_length;
+}
+
+void print_trial_indicator (unsigned int current_trial, simulation_parameters *sp) {
+  fprintf (stderr, "Image %s: Trial %d of %d\n",
+         sp->image_name, current_trial, sp->number_of_trials);
+}
+\end{ccode}
+
+      \subsubsection{Execution}
+
+	We combine all of the runtime code into the run_trials method. Given a
+	set of simulation parameters, it will print the results of each trial as
+	it goes. One of the reasons we let \verb|run_trials| run multiple trials
+	is that it is faster to use previously allocated memory than it is to
+	allocate new memory for each trial. Since a trial runs in less than a
+	second, it may make some difference, especially when many trials are
+	executed.
+
+\begin{ccode}
+void run_trials (simulation_parameters *sp) {
+  initialize_genetic_likelihoods ();
+
+  population *parents = create_population ();
+  population *children = create_population ();
+  population *temporary = NULL;
+
+  ensure_population (parents, sp->population_size);
+  ensure_population (children, sp->population_size);
+
+  sp->parent_fitness_vector = create_fitness_vector ();
+  sp->child_fitness_vector = create_fitness_vector ();
+  sp->result_fitness_vector = create_fitness_vector ();
+
+  ensure_fitness_vector (sp->parent_fitness_vector, sp->population_size);
+  ensure_fitness_vector (sp->child_fitness_vector, sp->population_size);
+  ensure_fitness_vector (sp->result_fitness_vector, sp->population_size);
+
+  if (sp->full_tracing) {
+    sp->history = create_population_history ();
+    ensure_population_history (sp->history, sp->generations);
+    for (unsigned int i = 0; i < sp->generations; i++) {
+      ensure_generation_history (sp->history->data + i, sp->population_size);
+      for (unsigned int j = 0; j < sp->population_size; j++)
+       ensure_individual_history (sp->history->data[i].data + j, sp->ancestral_sequence->length);
+    }
+  }
+
+  seed_rng (sp->random_seed);
+
+  for (unsigned int t = 0; t < sp->number_of_trials; t++) {
+    print_trial_indicator (t + 1, sp);
+
+    for (unsigned int i = 0; i < sp->population_size; i++)
+      copy_sequence (sp->ancestral_sequence, parents->data + i);
+
+    for (unsigned int generation = 0; generation < sp->generations; generation++) {
+      choose_parents (parents, children, sp, generation);
+
+      // Swap the parents and children out now.
+      temporary = parents;
+      parents = children;
+      children = temporary;
+
+      if (sp->print_each_generation)
+       print_d_values (parents, sp);
+    }
+
+    // Now select a subset and print out D values.
+    if (sp->print_sequences)
+      print_sequences (parents, sp);
+
+    print_d_values (parents, sp);
+  }
+
+  delete_population (parents);
+  delete_population (children);
+
+  free (parents); parents = NULL;
+  free (children); children = NULL;
+}
+\end{ccode}
+
+    \subsection{Front-end Code}
+
+      The profile files described in section \ref{sec:profiles} are parsed in a
+      standardized manner. The code to set sensible defaults and parse the files
+      is shown below.
+
+\begin{ccode}
+unsigned int free_return_true (void *v) {
+  free (v);
+  return TRUE;
+}
+
+void initialize_defaults (simulation_parameters *sp) {
+  struct timeval tv;
+  gettimeofday (&tv, NULL);
+
+  sp->random_seed                          = tv.tv_sec ^ tv.tv_usec;
+  sp->number_of_trials                     = 50;
+  sp->population_size                      = 500;
+  sp->generations                          = 1000;
+  sp->sample_size                          = 20;
+
+  sp->selection_model                      = NEUTRAL_SELECTION;
+  sp->drift_model                          = NEUTRAL_DRIFT;
+
+  sp->mutation_parameters.a_frequency      = 0.25;
+  sp->mutation_parameters.c_frequency      = 0.25;
+  sp->mutation_parameters.g_frequency      = 0.25;
+  sp->mutation_parameters.u_frequency      = 0.25;
+  sp->mutation_parameters.mutations_per_nucleotide = 3.4e-5;
+  sp->mutation_parameters.transitions_per_transversion = 1.3;
+
+  sp->recombination_rate                   = 2.5e-5;
+  sp->assumed_gl_variance                  = 0.0;
+
+  sp->ancestral_sequence = read_sequence (
+    "UGU ACA AGA CCC AAC AAC AAU ACA AUA AAA AGU AUA CAU AUG GGA CUA GGG AGG"
+    "ACA UUU UAU ACA ACA GGA GAA GUA AUA GGA GAU AUA AGA CAA GCA CAU UGU");
+  sp->purifying_optimal_sequence = read_sequence (
+    "UGU ACA AGA CCC AAC AAC AAU ACA AUA AAA AGU AUA CAU AUG GGA CUA GGG AGG"
+    "ACA UUU UAU ACA ACA GGA GAA GUA AUA GGA GAU AUA AGA CAA GCA CAU UGU");
+
+  sp->purifying_selection_coefficient      = 0.1;
+  sp->print_sequences                      = FALSE;
+  sp->print_each_generation                = FALSE;
+  sp->full_tracing                         = FALSE;
+
+  sp->sharp_bottleneck_start               = 200;
+  sp->sharp_bottleneck_duration            = 500;
+  sp->sharp_bottleneck_size                = 50;
+
+  sp->even_subdivision_start               = 200;
+  sp->even_subdivision_duration            = 500;
+  sp->even_subdivision_size                = 50;
+}
+
+unsigned int parse_options (simulation_parameters *sp, FILE *f) {
+  char s[65536];
+
+  while (! feof (f)) {
+    // Read the next whitespace-delimited word and check for known keywords.
+    fscanf (f, "%65535s", s);
+    if (! strcmp (s, "begin-comment")) {
+      while (strcmp (s, "end-comment"))
+	fscanf (f, "%65535s", s);
+
+      s[0] = ’\0’;  // This is to clear the existing memory in case
+		    // the read below hits an EOF.
+
+      // Load the next keyword if it exists.
+      fscanf (f, "%65535s", s);
+    }
+
+    if (strlen (s) &&   !
+	(((! strcmp (s,  "trials:")) && fscanf (f, "%u", &sp->number_of_trials)) ||
+	 ((! strcmp (s,  "population-size:")) && fscanf (f, "%u", &sp->population_size)) ||
+	 ((! strcmp (s,  "generations:")) && fscanf (f, "%u", &sp->generations)) ||
+	 ((! strcmp (s,  "sample-size:")) && fscanf (f, "%u", &sp->sample_size)) ||
+	 ((! strcmp (s,  "frequency-a:")) && fscanf (f, "%lf", &sp->mutation_parameters.a_frequency)) ||
+	 ((! strcmp (s,  "frequency-c:")) && fscanf (f, "%lf", &sp->mutation_parameters.c_frequency)) ||
+	 ((! strcmp (s,  "frequency-g:")) && fscanf (f, "%lf", &sp->mutation_parameters.g_frequency)) ||
+	 ((! strcmp (s,  "frequency-u:")) && fscanf (f, "%lf", &sp->mutation_parameters.u_frequency)) ||
+
+	 ((! strcmp (s, "sharp-bottleneck-start:")) &&
+	  fscanf (f, "%u", &sp->sharp_bottleneck_start)) ||
+
+	 ((! strcmp (s, "sharp-bottleneck-duration:")) &&
+	  fscanf (f, "%u", &sp->sharp_bottleneck_duration)) ||
+
+	 ((! strcmp (s, "sharp-bottleneck-size:")) &&
+	  fscanf (f, "%u", &sp->sharp_bottleneck_size)) ||
+
+	 ((! strcmp (s, "even-subdivision-start:")) &&
+	  fscanf (f, "%u", &sp->even_subdivision_start)) ||
+
+	 ((! strcmp (s, "even-subdivision-duration:")) &&
+	  fscanf (f, "%u", &sp->even_subdivision_duration)) ||
+
+	 ((! strcmp (s, "even-subdivision-size:")) &&
+	  fscanf (f, "%u", &sp->even_subdivision_size)) ||
+
+	 ((! strcmp (s, "random-seed:")) &&
+	  fscanf (f, "%u", &sp->random_seed) &&
+	  fprintf (stderr, "Warning: Specifying internal parameter random-seed, which may "
+			   "cause deviation from biological realism.\n")) ||
+
+	 ((! strcmp (s, "assumed-gl-variance:")) &&
+	  fscanf (f, "%lf", &sp->assumed_gl_variance) &&
+	  fprintf (stderr, "Warning: Specifying internal parameter assumed-gl-variance, "
+			   "which may cause deviation from biological realism.\n")) ||
+
+	 ((! strcmp (s, "mutations-per-nucleotide:")) &&
+	  fscanf (f, "%lf", &sp->mutation_parameters.mutations_per_nucleotide)) ||
+
+	 ((! strcmp (s, "transitions-per-transversion:")) &&
+	  fscanf (f, "%lf", &sp->mutation_parameters.transitions_per_transversion)) ||
+
+	 ((! strcmp (s, "recombination-rate:")) &&
+	  fscanf (f, "%lf", &sp->recombination_rate)) ||
+
+	 ((! strcmp (s, "purifying-selection-coefficient:")) &&
+	  fscanf (f, "%lf", &sp->purifying_selection_coefficient)) ||
+
+	 ((! strcmp (s, "print-sequences")) &&
+	  (sp->print_sequences = TRUE)) ||
+
+	 ((! strcmp (s, "print-each-generation")) &&
+	  (sp->print_each_generation = TRUE)) ||
+
+	 ((! strcmp (s, "full-tracing")) &&
+	  (sp->full_tracing = TRUE)) ||
+
+	 ((! strcmp (s, "ancestral-sequence:")) &&
+	  free_return_true (sp->ancestral_sequence) &&
+	  fscanf (f, "%65535s;", s) &&
+          (sp->ancestral_sequence = read_sequence (s))) ||
+
+	 ((! strcmp (s, "purifying-optimal-sequence:")) &&
+	  free_return_true (sp->purifying_optimal_sequence) &&
+	  fscanf (f, "%65535s;", s) &&
+	  (sp->purifying_optimal_sequence = read_sequence (s))) ||
+
+	 ((! strcmp (s, "selection-model:")) && fscanf (f, "%65535s", s) &&
+          ((! strcmp (s, "neutral") && ! (sp->selection_model = NEUTRAL_SELECTION)) ||
+           (! strcmp (s, "purifying") && (sp->selection_model = PURIFYING_SELECTION)))) ||
+
+	 ((! strcmp (s, "drift-model:")) && fscanf (f, "%65535s", s) &&
+          ((! strcmp (s, "neutral") && ! (sp->drift_model = NEUTRAL_DRIFT)) ||
+          ((! strcmp (s, "sharp-bottleneck") && (sp->drift_model = SHARP_BOTTLENECK_DRIFT)) ||
+          ((! strcmp (s, "even-subdivision") && (sp->drift_model = EVEN_SUBDIVISION_DRIFT)))))))) {
+      fprintf (stderr, "Error: Unrecognized directive or invalid value for ’%s’\n", s);
+      return 1;
+    }
+
+    // Make sure the buffer is empty before the next read. This is to ensure
+    // that if an EOF is hit after an empty read, the last word read is not
+    // interpreted as a directive.
+    s[0] = ’\0’;
+  }
+
+  return 0;
+}
+\end{ccode}
+
+     To prevent common errors, we provide a sanity check of the profile data.
+     This involves making sure that all relevant sequences are the same length,
+     that no quantitative parameters are out of bounds, etc.
+
+\begin{ccode}
+unsigned int sanity_check (simulation_parameters *sp) {
+  // Sequence lengths. Make sure that the purifying optimal sequence and the
+  // ancestral sequence have the same length.
+  if (sp->ancestral_sequence->length != sp->purifying_optimal_sequence->length &&
+      sp->selection_model == PURIFYING_SELECTION) {
+    fprintf (stderr, "Error: Ancestral sequence and optimal sequence are of "
+                 "different lengths.\n");
+    return 1;
+  }
+
+  // Check to make sure that the statistical sample size is no larger than the
+  // population size.
+  if (sp->sample_size > sp->population_size) {
+    fprintf (stderr, "Error: The statistical sample size is larger than the "
+                 "population size.\n");
+    return 1;
+  }
+
+  // If we’re using population bottlenecks, then do a series of sanity checks to
+  // make sure that the bottleneck doesn’t extend past the end of the
+  // generations, etc.
+  if (sp->drift_model == SHARP_BOTTLENECK_DRIFT) {
+    if (sp->sharp_bottleneck_start > sp->generations) {
+      fprintf (stderr, "Error: The sharp bottleneck begins after the simulation "
+                   "ends.\n");
+      return 1;
+    }
+
+    if (sp->sharp_bottleneck_start + sp->sharp_bottleneck_duration > sp->generations)
+      fprintf (stderr, "Warning: The sharp bottleneck extends past the end of the simulation.\n");
+
+    if (sp->sharp_bottleneck_size > sp->population_size) {
+      fprintf (stderr, "Error: The bottleneck size is larger than the total "
+                   "population size.\n");
+      return 1;
+    }
+  }
+
+  // Same for even subdivision.
+  if (sp->drift_model == EVEN_SUBDIVISION_DRIFT) {
+    if (sp->even_subdivision_start > sp->generations) {
+      fprintf (stderr, "Error: The even subdivision begins after the simulation "
+                   "ends.\n");
+      return 1;
+    }
+
+    if (sp->even_subdivision_start + sp->even_subdivision_duration > sp->generations)
+      fprintf (stderr, "Warning: The even subdivision extends past the end of the simulation.\n");
+
+    if (sp->even_subdivision_size > sp->population_size) {
+      fprintf (stderr, "Error: The even subdivision size is larger than the total "
+                   "population size.\n");
+      return 1;
+    }
+  }
+
+  // If print_each_generation is set and more than one trial is occurring,
+  // notify the user that they might have a difficult time separating out the
+  // runs. This isn’t an error, just an advisory.
+  if (sp->print_each_generation && sp->number_of_trials > 1)
+    fprintf (stderr, "Warning: Statistics are being printed at each generation, "
+                 "but more than one trial is being run. This is perfectly "
+                 "legal, but it may be difficult to separate the data once "
+                 "the simulation is finished. (Since multiple trials will "
+                 "be difficult to tell apart.)\n");
+
+  // If the selection coefficient is negative or greater than 1, then issue a
+  // warning indicating that the user has deviated from biological realism.
+  if (sp->purifying_selection_coefficient < 0.0 ||
+      sp->purifying_selection_coefficient > 1.0) {
+    fprintf (stderr, "Error: Selection coefficients not between 0 and 1 "
+                 "are not biologically realistic.\n");
+    return 1;
+  }
+
+  return 0;
+}
+\end{ccode}
+
+     This main method can be called by the actual main method to provide all of
+     the default functionality of the model. All memory is freed and command
+     options are parsed from stdin. The first command-line argument becomes the
+     image name of this instance.
+
+\begin{ccode}
+int main_delegate (int argc, char** argv) {
+  simulation_parameters sp;
+
+  // Initialize sensible defaults and then parse options.
+  initialize_defaults (&sp);
+
+  if (parse_options (&sp, stdin)) {
+    fprintf (stderr, "Error: At least one option was not parsed correctly.\n");
+    return EXIT_FAILURE;
+  }
+
+  if (sanity_check (&sp)) {
+    fprintf (stderr, "Error: At least one parameter had an invalid value.\n");
+    return EXIT_FAILURE;
+  }
+
+  fprintf (stderr, "Using random seed %d\n", sp.random_seed);
+  sp.image_name = argv[1];
+
+  // Run the trials.
+  run_trials (&sp);
+  delete_simulation_parameters (&sp);
+  return EXIT_SUCCESS;
+}
+\end{ccode}
+
+  \section{Conclusion}
+
+    This section isn’t a proper conclusion so much as a separate section for the
+    necessary \verb|#endif| directive to match the \verb|#ifndef __MODEL_H| at the beginning
+    of the file. In any case, this \verb|#endif| should remain after any code.
+
+\begin{ccode}
+#endif
+\end{ccode}
+
+\end{document}
+
+% vim: set syntax=c :
