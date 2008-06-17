@@ -1,12 +1,14 @@
 \documentclass{article}
 
 \usepackage{palatino}
+\usepackage{amsmath}
+\usepackage{amssymb}
 \usepackage{mathpazo}
 \usepackage{listings}
 \usepackage{hyperref}
 
 \lstnewenvironment{ccode}
-  {\lstset{language=c}}{}
+  {\lstset{language=c,frame=tlb,basicstyle={\footnotesize\tt}}}{}
 
 \begin{document}
   \title{MathBio 2008 Evolution Model}
@@ -203,7 +205,9 @@
         is a list of parameters for each model:
 
         \begin{description}
-          \item[Purifying selection]
+          \item[Purifying selection:] The parameters below are available to
+	  configure purifying selection.
+
             \begin{enumerate}
               \item[purifying-selection-coefficient: $x$]
               Sets the selection coefficient $s$ used for purifying selection.
@@ -218,7 +222,9 @@
               sequence must be of equal length.
             \end{enumerate}
 
-          \item[Sharp bottlenecks]
+          \item[Sharp bottlenecks] The parameters below are available to
+	  configure sharp bottlenecks.
+
             \begin{enumerate}
               \item[sharp-bottleneck-start: $n$]
               Sets the generation at which the bottleneck begins. By default,
@@ -235,7 +241,9 @@
               default, this option is set to 50.
             \end{enumerate}
 
-          \item[Even subdivisions]
+          \item[Even subdivisions] The parameters below are available to
+	  configure even subdivisions.
+
             \begin{enumerate}
               \item[even-subdivision-start: $n$]
               Sets the generation at which the subdivision begins. By default,
@@ -268,16 +276,16 @@
 
         \begin{enumerate}
           \item[assumed-gl-variance: $x$]
-          If $x \neq 0$, this option enables variance optimization in the theta
-          calculation. This entails taking a linear combination of genetic
-          likelihoods and the Nei and Gojobori ratios to minimize the
-          statistical variance of the nonsynonymity estimate (see section
-          \ref{sec:theta-variance-minimization}). One caveat of enabling
-          variance optimization is that it may not improve accuracy, since
-          neither estimator is known to be unbiased. A sensible nonzero value
-          for this setting is $1 \over 5$, indicating that the genetic
-          likelihood estimator is assumed to be as accurate as Nei and Gojobori
-          ratios for a position with 5 singletons.
+	  If $x \neq 0$, this option enables variance optimization in the theta
+	  calculation. This entails taking a linear combination of genetic
+	  likelihoods and the Nei and Gojobori ratios to minimize the
+	  statistical variance of the nonsynonymity estimate (see section
+	      \ref{sec:variance-minimization}). One caveat of enabling variance
+	  optimization is that it may not improve accuracy, since neither
+	  estimator is known to be unbiased. A sensible nonzero value for this
+	  setting is $1 \over 5$, indicating that the genetic likelihood
+	  estimator is assumed to be as accurate as Nei and Gojobori ratios for
+	  a position with 5 singletons.
 
           \item[random-seed: $n$]
           Seeds the random number generator with $n$ before any trials are run.
@@ -677,7 +685,7 @@ static const amino_acid amino_lookup[64] = {
 \begin{ccode}
 inline codon inherit (codon c1, codon c2, unsigned int ni) {
   codon mask = (codon) (3 << (ni * 2));
-  return (c1 & (0x3f ˆ mask)) | (c2 & mask);
+  return (c1 & (0x3f ^ mask)) | (c2 & mask);
 }
 
 inline codon inherit_nuc (codon c, nucleotide n, unsigned int ni)
@@ -689,7 +697,7 @@ inline nucleotide pick (codon c, unsigned int ni) {
 }
 
 inline codon mask (codon c1, codon c2) {
-  codon diff = c1 ˆ c2;
+  codon diff = c1 ^ c2;
   return (diff & 0x15) | ((diff & 0x2a) >> 1);
 }
 
@@ -1136,8 +1144,8 @@ inline sequence *recombine_sequences (sequence *s1, sequence *s2, sequence *dest
 }
 \end{ccode}
 
-      Sometimes it’s necessary to create a sequence from a string of nucleotide
-      letters. The read_sequence function does exactly that, and returns a
+      Sometimes it's necessary to create a sequence from a string of nucleotide
+      letters. The \verb|read_sequence| function does exactly that, and returns a
       pointer to the newly allocated sequence. The string parameter may contain
       spaces. All unrecognized characters (i.e.\ anything not an A, C, G, T, or
 	  U) are ignored.
@@ -1154,8 +1162,8 @@ sequence *read_sequence (const char *input) {
   sequence *result 	= create_sequence ();
 
   for (unsigned int i = 0; i < strlen (input); i++)
-    if (input[i] == ’A’ || input[i] == ’C’ || input[i] == ’G’ ||
-	input[i] == ’T’ || input[i] == ’U’)
+    if (input[i] == 'A' || input[i] == 'C' || input[i] == 'G' ||
+	input[i] == 'T' || input[i] == 'U')
       l++;
 
   ensure_sequence (result, l / 3);
@@ -1165,11 +1173,11 @@ sequence *read_sequence (const char *input) {
 
   for (unsigned int i = 0; i < strlen (input); i++)
     switch (input[i]) {
-      case ’A’: set_nucleotide_at_position (result, _a, position++); break;
-      case ’C’: set_nucleotide_at_position (result, _c, position++); break;
-      case ’G’: set_nucleotide_at_position (result, _g, position++); break;
-      case ’T’:
-      case ’U’: set_nucleotide_at_position (result, _u, position++); break;
+      case 'A': set_nucleotide_at_position (result, _a, position++); break;
+      case 'C': set_nucleotide_at_position (result, _c, position++); break;
+      case 'G': set_nucleotide_at_position (result, _g, position++); break;
+      case 'T':
+      case 'U': set_nucleotide_at_position (result, _u, position++); break;
     }
 
   return result;
@@ -1476,7 +1484,7 @@ void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics 
 	    & = {2a \over n} + (-2 + 2a) c \\ %
 	  0 & = {2a \over n} + (-2 + 2a) c \\ %
 	  c & = {a \over n} + 2ac \\ %
-	  a = {nc \over 1 + nc}
+	  a & = {nc \over 1 + nc}
 	\end{align*}
 
 	Here, $n$ is the number of singleton instances in a given position, and
@@ -1484,7 +1492,7 @@ void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics 
 	The linear combination that minimizes error, assuming that each
 	estimator is unbiased, is:
 
-	$$ \left( {nc \over 1 + nc} \right) X + \left (1 - {\nc \over 1 +
+	$$ \left( {nc \over 1 + nc} \right) X + \left (1 - {nc \over 1 +
 	    nc}\right) Y $$
 
 	When considering the value of the genetic likelihood estimator, we
@@ -1750,6 +1758,7 @@ void compute_d (population *p, simulation_parameters *sp, statistics *result) {
 \end{ccode}
 
     \subsection{Full Tracing}
+      \label{sec:full-tracing}
 
       Mutations are tracked as they occur during the simulation if the
       \verb|full-tracing| directive is specified in the profile (see section
@@ -1990,10 +1999,10 @@ inline void mutate_sequence (sequence *s, simulation_parameters *sp,
     // When we get here, we are guaranteed a change.
     nucleotide n     = pick (s->data[position / 3], position % 3);
     nucleotide r     = n; // Resulting nucleotide
-    double pu        = p->u_frequency * nucleotide_probability (_u, n, p);
-    double pc        = p->c_frequency * nucleotide_probability (_c, n, p);
-    double pa        = p->a_frequency * nucleotide_probability (_a, n, p);
-    double pg        = p->g_frequency * nucleotide_probability (_g, n, p);
+    double pu        = p->frequency_u * nucleotide_probability (_u, n, p);
+    double pc        = p->frequency_c * nucleotide_probability (_c, n, p);
+    double pa        = p->frequency_a * nucleotide_probability (_a, n, p);
+    double pg        = p->frequency_g * nucleotide_probability (_g, n, p);
     double selector  = normalized_random () * (pu + pc + pa + pg);
 
     if (selector < pu)        	 	r = _u;
@@ -2317,7 +2326,7 @@ inline void choose_parents (population *parents, population *children,
 	Sequences and statistical output need to be formatted as CSV data. We do
 	this with two functions, \verb|print_sequences| and
 	\verb|print_d_values|. Also, progress needs to be printed as the
-	simulation runs. We achieve this with the print_trial_indicator
+	simulation runs. We achieve this with the \verb|print_trial_indicator|
 	function, which prints both to standard output and standard error.
 
 \begin{ccode}
@@ -2400,13 +2409,13 @@ void print_trial_indicator (unsigned int current_trial, simulation_parameters *s
 
       \subsubsection{Execution}
 
-	We combine all of the runtime code into the run_trials method. Given a
-	set of simulation parameters, it will print the results of each trial as
-	it goes. One of the reasons we let \verb|run_trials| run multiple trials
-	is that it is faster to use previously allocated memory than it is to
-	allocate new memory for each trial. Since a trial runs in less than a
-	second, it may make some difference, especially when many trials are
-	executed.
+	We combine all of the runtime code into the \verb|run_trials| method.
+	Given a set of simulation parameters, it will print the results of each
+	trial as it goes. One of the reasons we let \verb|run_trials| run
+	multiple trials is that it is faster to use previously allocated memory
+	than it is to allocate new memory for each trial. Since a trial runs in
+	less than a second, it may make some difference, especially when many
+	trials are executed.
 
 \begin{ccode}
 void run_trials (simulation_parameters *sp) {
@@ -2497,10 +2506,10 @@ void initialize_defaults (simulation_parameters *sp) {
   sp->selection_model                      = NEUTRAL_SELECTION;
   sp->drift_model                          = NEUTRAL_DRIFT;
 
-  sp->mutation_parameters.a_frequency      = 0.25;
-  sp->mutation_parameters.c_frequency      = 0.25;
-  sp->mutation_parameters.g_frequency      = 0.25;
-  sp->mutation_parameters.u_frequency      = 0.25;
+  sp->mutation_parameters.frequency_a      = 0.25;
+  sp->mutation_parameters.frequency_c      = 0.25;
+  sp->mutation_parameters.frequency_g      = 0.25;
+  sp->mutation_parameters.frequency_u      = 0.25;
   sp->mutation_parameters.mutations_per_nucleotide = 3.4e-5;
   sp->mutation_parameters.transitions_per_transversion = 1.3;
 
@@ -2538,7 +2547,7 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
       while (strcmp (s, "end-comment"))
 	fscanf (f, "%65535s", s);
 
-      s[0] = ’\0’;  // This is to clear the existing memory in case
+      s[0] = '\0';  // This is to clear the existing memory in case
 		    // the read below hits an EOF.
 
       // Load the next keyword if it exists.
@@ -2550,10 +2559,10 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
 	 ((! strcmp (s,  "population-size:")) && fscanf (f, "%u", &sp->population_size)) ||
 	 ((! strcmp (s,  "generations:")) && fscanf (f, "%u", &sp->generations)) ||
 	 ((! strcmp (s,  "sample-size:")) && fscanf (f, "%u", &sp->sample_size)) ||
-	 ((! strcmp (s,  "frequency-a:")) && fscanf (f, "%lf", &sp->mutation_parameters.a_frequency)) ||
-	 ((! strcmp (s,  "frequency-c:")) && fscanf (f, "%lf", &sp->mutation_parameters.c_frequency)) ||
-	 ((! strcmp (s,  "frequency-g:")) && fscanf (f, "%lf", &sp->mutation_parameters.g_frequency)) ||
-	 ((! strcmp (s,  "frequency-u:")) && fscanf (f, "%lf", &sp->mutation_parameters.u_frequency)) ||
+	 ((! strcmp (s,  "frequency-a:")) && fscanf (f, "%lf", &sp->mutation_parameters.frequency_a)) ||
+	 ((! strcmp (s,  "frequency-c:")) && fscanf (f, "%lf", &sp->mutation_parameters.frequency_c)) ||
+	 ((! strcmp (s,  "frequency-g:")) && fscanf (f, "%lf", &sp->mutation_parameters.frequency_g)) ||
+	 ((! strcmp (s,  "frequency-u:")) && fscanf (f, "%lf", &sp->mutation_parameters.frequency_u)) ||
 
 	 ((! strcmp (s, "sharp-bottleneck-start:")) &&
 	  fscanf (f, "%u", &sp->sharp_bottleneck_start)) ||
@@ -2629,7 +2638,7 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
     // Make sure the buffer is empty before the next read. This is to ensure
     // that if an EOF is hit after an empty read, the last word read is not
     // interpreted as a directive.
-    s[0] = ’\0’;
+    s[0] = '\0';
   }
 
   return 0;
