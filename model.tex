@@ -866,7 +866,7 @@ void initialize_genetic_likelihoods () {
       shortcut that can be taken to optimize the code. By defining a codon set
       as a 64-bit integer, we can use number-theoretic operations to yield
       extremely fast and compact code. An element is a member of the set if the
-      bit with that element’s index is set to a 1. This representation allows a
+      bit with that element's index is set to a 1. This representation allows a
       convenient way to count the number of elements in a set with relatively
       few operations. We retrieve the values of all bits whose significance is 1
       modulo 63, then those that are 2 modulo 63, etc.\ until all bits are
@@ -1002,12 +1002,12 @@ inline int codon_set_singleton (codon_set s) {
 }
 \end{ccode}
 
-      Here’s where it gets even scarier. We want to determine whether a set of
+      Here's where it gets even scarier. We want to determine whether a set of
       codons is synonymous or nonsynonymous. Specifically, do the codons in the
       set code for exactly one amino acid or more than one? To do this with the
       minimal number of operations requires bitmasks, which we use below. The
       guiding idea is that there are a lot of patterns in the genetic code, and
-      by exploiting those we can handle many cases at once. Later I’ll write up
+      by exploiting those we can handle many cases at once. Later I'll write up
       the actual process for deriving the hexadecimal numbers that appear here.
 
 \begin{ccode}
@@ -1322,7 +1322,7 @@ typedef struct {
   double	pi_non;		// # pairwise differences - pi_syn
   double	theta_syn;	// s_syn / pairwise
   double	theta_non;	// s_non / pairwise
-  double	d_syn;		// Tajima’s D statistic for synonymous differences
+  double	d_syn;		// Tajima's D statistic for synonymous differences
   double	d_non;		// Ditto for nonsynonymous differences
 } statistics;
 
@@ -1578,7 +1578,7 @@ void compute_theta (population *p, simulation_parameters *sp, statistics *result
     // If the site segregates, then we compute theta for it. Otherwise, we pass
     // it up.
     if (cs_size == 2 && codon_set_singleton (cs) != -1) {
-      // It’s a singleton. In this case, it’s either synonymous or not.
+      // It's a singleton. In this case, it's either synonymous or not.
       if (codon_set_synonymous (cs))
 	result->site_syn->data[i] = 1.0;
       else
@@ -1659,9 +1659,9 @@ inline double non_path_3 (codon _c1, codon i1, codon i2, codon _c2)
 inline double discrete_pathways_nonsynonymity (codon c1, codon c2, simulation_parameters *sp) {
   unsigned int nc = changes (c1, c2);
   if (nc == 0) {
-    // No or three changes. We wouldn’t be calling this procedure if there
-    // weren’t any changes, so there must be three. (Actually, everything
-    // works for zero changes as well, but it’s a slow way to come up with
+    // No or three changes. We wouldn't be calling this procedure if there
+    // weren't any changes, so there must be three. (Actually, everything
+    // works for zero changes as well, but it's a slow way to come up with
     // zero changes.)
     codon i11 = inherit (c1, c2, 0), i12 = inherit (i11, c2, 1);
     codon i21 = inherit (c1, c2, 0), i22 = inherit (i21, c2, 2);
@@ -1678,7 +1678,7 @@ inline double discrete_pathways_nonsynonymity (codon c1, codon c2, simulation_pa
     return non_path_1 (c1, c2);
   else {
     // Two changes. In a way, this is the most tricky since we have to
-    // specifically exclude the configuration that doesn’t change anything.
+    // specifically exclude the configuration that doesn't change anything.
     codon i1 = inherit (c1, c2, 0);
     codon i2 = inherit (c1, c2, 1);
     codon i3 = inherit (c1, c2, 2);
@@ -1778,7 +1778,7 @@ void compute_d (population *p, simulation_parameters *sp, statistics *result) {
 
 \begin{ccode}
 bool is_mrca_descent (bool *individuals_seen, unsigned int n) {
-  // If multiple individuals exist, then we’re not at a MRCA yet.
+  // If multiple individuals exist, then we're not at a MRCA yet.
   bool seen_one_yet = FALSE;
 
   for (unsigned int i = 0; i < n; i++)
@@ -1796,7 +1796,7 @@ bool is_mrca_state (bool *individuals_seen, unsigned int n, generation_history *
 		    unsigned int codon_index) {
   // Find the first seen current codon state and make sure everything else lines
   // up with it.
-  codon first_state = 0xff; // Anything > 128 means we haven’t seen anything yet.
+  codon first_state = 0xff; // Anything > 128 means we haven't seen anything yet.
 
   for (unsigned int i = 0; i < n; i++)
     if (individuals_seen[i]) {
@@ -1887,13 +1887,13 @@ unsigned long long int count_mutations (population *p, simulation_parameters *sp
       if (individuals_seen[i]) {
         individual_history *h = sp->history->data[current_generation].data + i;
 
-        // Find this guy’s parent(s) and mark them as having been seen.
+        // Find this guy's parent(s) and mark them as having been seen.
         last_individuals_seen[h->data[codon_index].parent_index] = TRUE;
 
         if (h->data[codon_index].recombination_nucleotide != 0)
           last_individuals_seen[h->data[codon_index].other_parent_index] = TRUE;
 
-        // Add this individual’s mutations to the totals.
+        // Add this individual's mutations to the totals.
         non_mutations += history_non_mutations (h->data + codon_index);
         total_mutations += history_total_mutations (h->data + codon_index);
       }
@@ -1919,7 +1919,7 @@ void compute_tracked_changes (population *p, simulation_parameters *sp, statisti
   result->multiplitons = 0;
   for (unsigned int ci = 0; ci < p->data[0].length; ci++)
     if (codon_set_multipliton (theta_site_set (p, ci))) {
-      // Test the estimators here. We don’t test them on singleton sites at the
+      // Test the estimators here. We don't test them on singleton sites at the
       // moment, nor do we test our assumptions about homoplasy by investigating
       // invariant sites.
 
@@ -2020,7 +2020,7 @@ inline void mutate_sequence (sequence *s, simulation_parameters *sp,
 
     if (sp->full_tracing)
       // Record the new codon state in the appropriate slot.
-      // We explicitly don’t alter the original codon because its state is lost,
+      // We explicitly don't alter the original codon because its state is lost,
       // and we need to track multiple mutations.
       sp->history->data[generation].data[individual].data[position / 3].state_after_mutation = new_codon;
 
@@ -2098,7 +2098,7 @@ inline double diversifying_selection (population *p, unsigned int idx, simulatio
       else if (! synonymous (p->data[i].data[j], p->data[idx].data[j]))
 	differences++;
 
-  return (double) differences / (double) (p->length - 1);
+  return (double) (differences + 1) / (double) (p->length - 1);
 }
 \end{ccode}
 
@@ -2155,7 +2155,7 @@ inline double even_population_subdivision (
 
 \begin{ccode}
 inline void populate_parent_fitness (population *parents, simulation_parameters *sp) {
-  // Creates the vector for the parents’ fitnesses and stores it in sp.
+  // Creates the vector for the parents' fitnesses and stores it in sp.
   for (unsigned int i = 0; i < parents->length; i++) {
     double current;
 
@@ -2297,7 +2297,7 @@ inline void choose_parents (population *parents, population *children,
                       simulation_parameters *sp, unsigned int generation) {
   // Run through the population and recombine where necessary, performing simple
   // redirection where possible. There may be places where time could be saved
-  // by pointer shuffling rather than data copies, but I’m not seeing them yet.
+  // by pointer shuffling rather than data copies, but I'm not seeing them yet.
   fitness_vector *resulting_vector = sp->parent_fitness_vector;
 
   // First, compute the fitness vector for the parents.
@@ -2358,7 +2358,7 @@ void print_sequences (population *p, simulation_parameters *sp) {
 
 void print_d_values (population *p, simulation_parameters *sp) {
   // Since the population is completely shuffled, we take the first n
-  // individuals. The simplest way to do this is to cheat a little bit: We don’t
+  // individuals. The simplest way to do this is to cheat a little bit: We don't
   // actually need to allocate any new memory. Instead, we just modify the
   // length attribute of the population and then change it back.
 
@@ -2375,6 +2375,7 @@ void print_d_values (population *p, simulation_parameters *sp) {
 
   if (sp->full_tracing) {
     compute_tracked_changes 	(p, sp, &s);
+
     // Prints out in this format:
     // d_syn, d_non, pi_syn, pi_non, theta_syn, theta_non, s_syn, s_non,
     // n, pairwise, a1, a2, b1, b2, c1, c2, e1, e2, ng_site[0], ng_site[1],
@@ -2641,7 +2642,7 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
           ((! strcmp (s, "neutral") && ! (sp->drift_model = NEUTRAL_DRIFT)) ||
           ((! strcmp (s, "sharp-bottleneck") && (sp->drift_model = SHARP_BOTTLENECK_DRIFT)) ||
           ((! strcmp (s, "even-subdivision") && (sp->drift_model = EVEN_SUBDIVISION_DRIFT)))))))) {
-      fprintf (stderr, "Error: Unrecognized directive or invalid value for ’%s’\n", s);
+      fprintf (stderr, "Error: Unrecognized directive or invalid value for '%s'\n", s);
       return 1;
     }
 
@@ -2678,8 +2679,8 @@ unsigned int sanity_check (simulation_parameters *sp) {
     return 1;
   }
 
-  // If we’re using population bottlenecks, then do a series of sanity checks to
-  // make sure that the bottleneck doesn’t extend past the end of the
+  // If we're using population bottlenecks, then do a series of sanity checks to
+  // make sure that the bottleneck doesn't extend past the end of the
   // generations, etc.
   if (sp->drift_model == SHARP_BOTTLENECK_DRIFT) {
     if (sp->sharp_bottleneck_start > sp->generations) {
@@ -2718,7 +2719,7 @@ unsigned int sanity_check (simulation_parameters *sp) {
 
   // If print_each_generation is set and more than one trial is occurring,
   // notify the user that they might have a difficult time separating out the
-  // runs. This isn’t an error, just an advisory.
+  // runs. This isn't an error, just an advisory.
   if (sp->print_each_generation && sp->number_of_trials > 1)
     fprintf (stderr, "Warning: Statistics are being printed at each generation, "
                  "but more than one trial is being run. This is perfectly "
@@ -2773,7 +2774,7 @@ int main_delegate (int argc, char** argv) {
 
   \section{Conclusion}
 
-    This section isn’t a proper conclusion so much as a separate section for the
+    This section isn't a proper conclusion so much as a separate section for the
     necessary \verb|#endif| directive to match the \verb|#ifndef __MODEL_H| at the beginning
     of the file. In any case, this \verb|#endif| should remain after any code.
 
