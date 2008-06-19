@@ -11,23 +11,9 @@
   {\lstset{language=c,frame=tlb,basicstyle={\scriptsize\tt}}}{}
 
 \begin{document}
-  \title{MathBio 2008 Evolution Model}
+  \title{MathBio Yggdrasil Simulation and Analysis}
   \author{Spencer Tipping}
   \maketitle
-
-  \begin{abstract}
-    
-    This program is designed to generate populations and then run statistical
-    analysis on the results. All output is to the standard output unless
-    otherwise specified. There is no warranty, express or implied, provided with
-    this code, nor any guarantee of merchantability or fitness for any purpose.
-
-    The \verb|sd| tool for literate coding and the GCC toolchain, along with a
-    compliant Make, are required to build this system. \LaTeX is required to
-    build documentation. For more information about rebuilding, see section
-    \ref{sec:rebuilding}.
-
-  \end{abstract}
 
   \tableofcontents
 
@@ -621,10 +607,10 @@ typedef unsigned char bool;
       nucleotides.
       
       Also, the structure of codons is purely numerical at the moment, but that
-      could change. When we want to use a codon as a number, we should ab-
-      stract that through the \verb|_idx| macro, which, should the structure of
-      a codon ever change in the future, will return the codon as an index and
-      not as a structure.
+      could change. When we want to use a codon as a number, we should abstract
+      that through the \verb|_idx| macro, which, should the structure of a codon
+      ever change in the future, will return the codon as an index and not as a
+      structure.
 
 \begin{ccode}
 #define _idx(c) (c)
@@ -908,10 +894,10 @@ void initialize_genetic_likelihoods () {
         1000 \cdots & = 0x88888888
       \end{align*}
 
-      A change occurred in the lower-order two bits iff two of these masks re-
-      turned nonzero values when anded with the set. Similarly, we can determine
-      whether a change occurred within the two middle bits by these four
-      bitmasks:
+      A change occurred in the lower-order two bits iff two of these masks
+      returned nonzero values when anded with the set. Similarly, we can
+      determine whether a change occurred within the two middle bits by these
+      four bitmasks:
 
       \begin{align*}
         0000000000001111 \cdots & = 0x000f000f \\ %
@@ -1307,8 +1293,8 @@ typedef struct {
   double	rn_bias;
   double	rn_var;
 
-  theta_array 	*site_syn;
-  theta_array 	*site_non;
+  theta_array 	*site_syn;	// Actual measured site synonymity
+  theta_array 	*site_non;	// Actual measured site nonsynonymity
   theta_array 	*ng_syn;
   theta_array 	*ng_non;
   theta_array 	*gl_syn;
@@ -1509,8 +1495,8 @@ void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics 
 
 	In the population given by sequences AAATTT, GACTTA, and CACTTA,
 	there is a Nei and Gojobori singleton at position 3. However, the first codon
-	is also variant at position 1, which has no Nei and Gojobori singleton. Dur-
-	ing the summer of 2007, three different ways of handling this situation were
+	is also variant at position 1, which has no Nei and Gojobori singleton.
+	During the summer of 2007, three different ways of handling this situation were
 	documented. Two of them are these:
 
 	\begin{enumerate}
@@ -1640,8 +1626,8 @@ void compute_theta (population *p, simulation_parameters *sp, statistics *result
 
       Our modification separates the synonymous from the nonsynonymous changes.
       For singleton changes, it is a simple distinction; we simply check the
-      syn- onymity or nonsynonymity of the change. However, some changes are am-
-      biguous. For example, if AAA changes to CAC, did it change by first
+      synonymity or nonsynonymity of the change. However, some changes are
+      ambiguous. For example, if AAA changes to CAC, did it change by first
       mutating to CAA or by first mutating to AAC? We cannot find out, but we
       can take the average of all of the possibilities by using discrete
       estimation.
@@ -1768,7 +1754,7 @@ void compute_d (population *p, simulation_parameters *sp, statistics *result) {
 
       Mutations are tracked as they occur during the simulation if the
       \verb|full-tracing| directive is specified in the profile (see section
-	  \ref{sec:profiles}). A full trace of the evolutionary his- tory is
+	  \ref{sec:profiles}). A full trace of the evolutionary history is
       kept of all of the organisms, and to find the number of mutations we
       backtrace the tree to find the MRCA (either by state or by descent),
       totaling the synonymous and nonsynonymous mutations as we go. Then we
@@ -1961,13 +1947,13 @@ void compute_tracked_changes (population *p, simulation_parameters *sp, statisti
 
     Simulation parameters (see section \ref{sec:simulation-parameters}) include
     the initial population size, the ancestral sequence, HKY-85 parameters,
-    recombination rate, etc. Fitness func- tions take a population and the index
+    recombination rate, etc. Fitness functions take a population and the index
     of a sequence and should return a double between 0 and 1 indicating the
     relative fitness of that sequence.
 
-    By default, we assume the neutral model and add in selective or drift influ-
-    ences. An example of such an influence is purifying selection, where
-    individu- als who deviate from a predefined optimum are less fit. The next
+    By default, we assume the neutral model and add in selective or drift
+    influences. An example of such an influence is purifying selection, where
+    individuals who deviate from a predefined optimum are less fit. The next
     step is to define the rules for mutation under the neutral model.  Mutation
     is generally simple, as is recombination.
     
