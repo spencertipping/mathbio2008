@@ -115,6 +115,59 @@
           entails, see section \ref{sec:full-tracing}.
         \end{enumerate}
 
+      \subsubsection{Process directives}
+	\label{sec:process-directives}
+
+	These directives alter the nature of the processing done by the program.
+	For example, sometimes statistical computations should be omitted, or
+	they should be performed on sequences that are loaded from a file
+	instead of produced internally. Because these directives often specify
+	complex behavior, they have a nonstandard syntax.
+
+	\begin{enumerate}
+	  \item[simulation-only]
+	  Specifying this directive will cause only the simulation portion of
+	  the code to be run, and all resulting sequences are output in packed
+	  form to the standard output. (See section \ref{sec:sequence-forms} for
+	  a description of packed formatting.) If \verb|make-profile| is
+	  specified, then a valid profile is generated such that running the
+	  program on the resulting output produces the statistical measurements
+	  for those packed sequences.
+
+	  \item[make-profile]
+	  This directive is available only if \verb|simulation-only| has been
+	  specified. Specifying \verb|make-profile| causes the output of the
+	  model to be a valid profile instead of just a bunch of sequences. This
+	  results in the following being legal:
+
+	  \begin{verbatim}
+$ ./model-runtime > output_profile <<EOF
+simulation-only
+make-profile
+EOF
+[output elided]
+$ ./model-runtime < output_profile > output.csv
+$
+	  \end{verbatim}
+
+	  Note that if the run is interrupted and a trial is not finished, the
+	  output may not be usable without modification because it will not
+	  contain as many trials as are indicated by the header.
+
+	  \item[statistics-only]
+	  Specifying this directive disables the simulation code and enables the
+	  \verb|import-sequences| directive. The purpose of specifying this
+	  would be to load sequences from a file instead of generating them.
+
+	  \item[import-sequences $m$ $n$ $s_1\ s_2\ \cdots$]
+	  This directive is available only if \verb|statistics-only| has been
+	  specified. $m$ is the number of trials, $n$ is the number of sequences
+	  to import per trial, and each of $s_1$, $s_2$, etc. is a valid
+	  sequence in packed or unpacked form (see section
+	  \ref{sec:sequence-forms}). These sequences are then statistically
+	  analyzed.
+	\end{enumerate}
+
       \subsubsection{General-purpose biological directives}
         \label{sec:general-directives}
 
@@ -1115,11 +1168,42 @@ inline sequence *recombine_sequences (sequence *s1, sequence *s2, sequence *dest
 }
 \end{ccode}
 
-      Sometimes it's necessary to create a sequence from a string of nucleotide
-      letters. The \verb|read_sequence| function does exactly that, and returns a
-      pointer to the newly allocated sequence. The string parameter may contain
-      spaces. All unrecognized characters (i.e.\ anything not an A, C, G, T, or
-	  U) are ignored.
+      \subsubsection{Sequence serialization forms}
+	\label{sec:sequence-forms}
+
+	Sequences can be serialized into two different forms. One form, the {\em
+	nucleotide form}, has the following specifications:
+
+	\begin{enumerate}
+	  \item The output consists only of the characters A, C, G, T, U, and
+	  optional whitespace.
+
+	  \item If a codon in the sequence has nucleotide $n_0$ at position 0,
+	  $n_1$ at position 1, and $n_2$ at position 2, then it is output as the
+	  characters $n_2 n_1 n_0$.
+	\end{enumerate}
+
+	An example of a sequence in nucleotide form is \verb|ACA UCU GGG TAG|.
+
+	The other form, {\em packed form}, has these specifications:
+
+	\begin{enumerate}
+	  \item The first character of output is an exclamation point
+	  (\verb|!|).
+
+	  \item Each codon is represented as a single character from the string
+	  \verb|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/|,
+	  such that the codon whose numerical index is $i$ is represented by the
+	  $i$ character in that string.
+	\end{enumerate}
+
+	An example of a sequence in packed form is \verb|!6cA+5gnG9/r|. This
+	encodes the human-readable sequence beginning with \verb|AAA CGU UUU GGA|.
+
+	The \verb|print-sequence| function writes a sequence to a file in either
+	nucleotide or packed form. The \verb|read-sequence| function does the
+	opposite; given a string containing a nucleotide-form or packed-form
+	sequence, it returns a newly constructed sequence object.
 
 \begin{ccode}
 inline void set_nucleotide_at_position (sequence *s, nucleotide n, unsigned int position) {
@@ -1127,29 +1211,77 @@ inline void set_nucleotide_at_position (sequence *s, nucleotide n, unsigned int 
   s->data[position / 3] = inherit_nuc (s->data[position / 3], n, 2 - (position % 3));
 }
 
+void print_sequence (sequence *s, FILE *f, bool packed) {
+  // Prints a serialized representation of the sequence s to the file f. If
+  // packed is true, then packed form is used; otherwise nucleotide form is
+  // used.
+
+  const char *packed_chars 	= "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+				  "abcdefghijklmnopqrstuvwxyz"
+				  "0123456789+/";
+  const char *nucleotide_chars	= "TCAG";
+
+  if (packed) {
+    fprintf (f, "!");
+
+    for (unsigned int i = 0; i < s->length; i++)
+      fprintf (f, "%c", packed_chars[s->data[i]]);
+  } else
+    for (unsigned int i = 0; i < s->length; i++)
+      fprintf (f, "%c%c%c", nucleotide_chars[pick (s->data[i], 2)],
+			    nucleotide_chars[pick (s->data[i], 1)],
+			    nucleotide_chars[pick (s->data[i], 0)]);
+}
+
 sequence *read_sequence (const char *input) {
-  unsigned int position = 0; // In nucleotides, not codons.
-  unsigned int l   	= 0;
+  unsigned int position = 0; 	// In nucleotides if reading a nucleotide-form
+				// sequence, and codons if packed-form.
+  unsigned int l   	= 0;	// Same here.
   sequence *result 	= create_sequence ();
 
-  for (unsigned int i = 0; i < strlen (input); i++)
-    if (input[i] == 'A' || input[i] == 'C' || input[i] == 'G' ||
-	input[i] == 'T' || input[i] == 'U')
-      l++;
+  if (input[0] == '!') {
+    // Read a packed-form sequence.
+    for (unsigned int i = 1; i < strlen (input); i++)
+      if ((input[i] >= 'A' && input[i] <= 'Z') ||
+	  (input[i] >= 'a' && input[i] <= 'z') ||
+	  (input[i] >= '0' && input[i] <= '9') ||
+	  input[i] == '+' || input[i] == '/')
+	l++;
 
-  ensure_sequence (result, l / 3);
+    ensure_sequence (result, l);
 
-  for (unsigned int i = 0; i < l / 3; i++)
-    result->data[i] = 0;
+    for (unsigned int i = 1; i < strlen (input); i++)
+      if (input[i] >= 'A' && input[i] <= 'Z')
+	result->data[position++] = input[i] - 'A';
+      else if (input[i] >= 'a' && input[i] <= 'z')
+	result->data[position++] = input[i] - 'a' + 26;
+      else if (input[i] >= '0' && input[i] <= '9')
+	result->data[position++] = input[i] - '0' + 52;
+      else if (input[i] == '+')
+	result->data[position++] = 62;
+      else if (input[i] == '/')
+	result->data[position++] = 63;
+  } else {
+    // Read a nucleotide-form sequence.
+    for (unsigned int i = 0; i < strlen (input); i++)
+      if (input[i] == 'A' || input[i] == 'C' || input[i] == 'G' ||
+	  input[i] == 'T' || input[i] == 'U')
+	l++;
 
-  for (unsigned int i = 0; i < strlen (input); i++)
-    switch (input[i]) {
-      case 'A': set_nucleotide_at_position (result, _a, position++); break;
-      case 'C': set_nucleotide_at_position (result, _c, position++); break;
-      case 'G': set_nucleotide_at_position (result, _g, position++); break;
-      case 'T':
-      case 'U': set_nucleotide_at_position (result, _u, position++); break;
-    }
+    ensure_sequence (result, l / 3);
+
+    for (unsigned int i = 0; i < l / 3; i++)
+      result->data[i] = 0;
+
+    for (unsigned int i = 0; i < strlen (input); i++)
+      switch (input[i]) {
+	case 'A': set_nucleotide_at_position (result, _a, position++); break;
+	case 'C': set_nucleotide_at_position (result, _c, position++); break;
+	case 'G': set_nucleotide_at_position (result, _g, position++); break;
+	case 'T':
+	case 'U': set_nucleotide_at_position (result, _u, position++); break;
+      }
+  }
 
   return result;
 }
@@ -2355,22 +2487,17 @@ inline void choose_parents (population *parents, population *children,
 	this with two functions, \verb|print_sequences| and
 	\verb|print_d_values|. Also, progress needs to be printed as the
 	simulation runs. We achieve this with the \verb|print_trial_indicator|
-	function, which prints both to standard output and standard error.
+	function, which prints both to standard output and standard error. For
+	more information about sequence forms, see section
+	\ref{sec:sequence-forms}.
 
 \begin{ccode}
-void print_sequences (population *p, simulation_parameters *sp) {
-  // Prints out the sample of 20 sequences that was used for statistical
-  // calculations. To be consistent, we just use the first 20. This is valid
-  // because random sequences are chosen at each step.
+void print_sequences (population *p, bool packed) {
+  // Prints all of the sequences in a population, optionally in packed form.
 
-  const char *nucleotides = "TCAG";
-
-  for (unsigned int i = 0; i < sp->sample_size; i++) {
-    printf ("Sequence %d of %d:, ", i + 1, sp->sample_size);
-    for (unsigned int j = 0; j < p->data[i].length; j++)
-      printf ("%c%c%c", nucleotides[pick (p->data[i].data[j], 2)],
-			nucleotides[pick (p->data[i].data[j], 1)],
-			nucleotides[pick (p->data[i].data[j], 0)]);
+  for (unsigned int i = 0; i < p->length; i++) {
+    printf ("Sequence %d of %d:, ", i + 1, p->length);
+    print_sequence (stdout, p->data + i, packed);
     printf ("\n");
   }
 }
@@ -2392,39 +2519,10 @@ void print_d_values (population *p, simulation_parameters *sp) {
   compute_pi             	(p, sp, &s);
   compute_d              	(p, sp, &s);
 
-  if (sp->full_tracing) {
+  if (sp->full_tracing)
     compute_tracked_changes 	(p, sp, &s);
 
-    // Prints out in this format:
-    // d_syn, d_non, pi_syn, pi_non, theta_syn, theta_non, s_syn, s_non,
-    // n, pairwise, a1, a2, b1, b2, c1, c2, e1, e2, ng_site[0], ng_site[1],
-    // ng_site[2], ng_size[0], ng_size[1], ng_size[2], multis[0], multis[1],
-    // multis[2], p0syn, p0non, p2syn, p2non, ng_bias[0], ng_var[0], ng_bias[2],
-    // ng_var[2], gl_bias[0], gl_var[0], gl_bias[2], gl_var[2], rn_bias[0],
-    // rn_var[0], rn_bias[2], rn_var[2]
-    printf ("%f, %f, %f, %f, %f, %f, %f, %f, %d, %d, %f, %f, %f, %f, %f, %f, "
-	    "%f, %f, %f, %f, %f, %d, %d, %d, %d, %d, %d, %f, %f, %f, %f, %f, "
-	    "%f\n",
-	    s.d_syn, s.d_non, s.pi_syn, s.pi_non, s.theta_syn, s.theta_non,
-	    s.s_syn, s.s_non, s.n, s.pairwise, s.a1, s.a2, s.b1, s.b2, s.c1,
-	    s.c2, s.e1, s.e2, s.ng_site[0], s.ng_site[1], s.ng_site[2],
-	    s.ng_size[0], s.ng_size[1], s.ng_size[2], s.multis[0], s.multis[1],
-	    s.multis[2], s.ng_bias, s.ng_var, s.gl_bias, s.gl_var, s.rn_bias,
-	    s.rn_var);
-  } else {
-    // Prints out in this format:
-    // d_syn, d_non, pi_syn, pi_non, theta_syn, theta_non, s_syn, s_non,
-    // n, pairwise, a1, a2, b1, b2, c1, c2, e1, e2, ng_site[0], ng_site[1],
-    // ng_site[2], ng_size[0], ng_size[1], ng_size[2], multis[0], multis[1],
-    // multis[2]
-    printf ("%f, %f, %f, %f, %f, %f, %f, %f, %d, %d, %f, %f, %f, %f, %f, %f, "
-	    "%f, %f, %f, %f, %f, %d, %d, %d, %d, %d, %d\n",
-	    s.d_syn, s.d_non, s.pi_syn, s.pi_non, s.theta_syn, s.theta_non,
-	    s.s_syn, s.s_non, s.n, s.pairwise, s.a1, s.a2, s.b1, s.b2, s.c1,
-	    s.c2, s.e1, s.e2, s.ng_site[0], s.ng_site[1], s.ng_site[2],
-	    s.ng_size[0], s.ng_size[1], s.ng_size[2], s.multis[0], s.multis[1],
-	    s.multis[2]);
-  }
+  // TODO: Print D values...
 
   delete_statistics (&s);
   p->length = old_length;
