@@ -419,6 +419,7 @@ $ ./model-runtime < profiles/my_profile > output.csv
 
 \begin{ccode}
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <math.h>
 #include <sys/time.h>
@@ -580,11 +581,11 @@ inline double normalized_random ()
     manipulate those structures.
 
 \begin{ccode}
-typedef unsigned char amino_acid;
-typedef unsigned char codon;
-typedef unsigned char nucleotide;
-typedef long long int codon_set;
-typedef unsigned char bool;
+typedef uint8_t		amino_acid;
+typedef uint8_t		codon;
+typedef uint8_t		nucleotide;
+typedef uint64_t	codon_set;
+typedef uint8_t		bool;
 
 #define FALSE (0 == 1)
 #define TRUE (! FALSE)
@@ -715,7 +716,7 @@ inline bool is_purine (nucleotide n)
 __define_structure_simple__(sequence, codon)
 __define_structure_complex__(population, sequence)
 __define_structure_simple__(fitness_vector, double)
-__define_structure_simple__(theta_array, double)
+__define_structure_simple__(site_statistic, double)
 \end{ccode}
 
       We also define structures to trace the evolutionary history of an
@@ -822,28 +823,6 @@ inline void delete_simulation_parameters (simulation_parameters *sp) {
 }
 \end{ccode}
 
-    \subsection{Genetic Likelihoods}
-      \label{sec:genetic-likelihoods}
-
-      Here we define the genetic likelihoods matrix and an initialization
-      function for it.
-
-\begin{ccode}
-static double genetic_code_nonsyn_likelihoods[3][64];
-
-void initialize_genetic_likelihoods () {
-  // Count the number of changes in each position that produce a nonsynonymous
-  // change. The proportion will be stored in each cell.
-  for (codon c = 0; c < 64; c++)
-    for (unsigned int position = 0; position < 3; position++) {
-      genetic_code_nonsyn_likelihoods[position][c] = 0.0;
-      for (nucleotide nuc = 0; nuc < 4; nuc++)
-	if (! synonymous (inherit_nuc (c, nuc, position), c))
-	  genetic_code_nonsyn_likelihoods[position][c] += 1.0 / 3.0;
-    }
-}
-\end{ccode}
-
     \subsection{Codon Sets}
       \label{sec:codon-sets}
 
@@ -938,10 +917,10 @@ inline codon_set codon_set_count_half (codon_set _s) {
 }
 
 inline unsigned int codon_set_count (codon_set s) {
-  // Count by halves. This code uses a mod-31 algorithm described in the
+  // Count by halves. This code uses a mod-63 algorithm described in the
   // writeup.
   return codon_set_count_half ((s >> 32) & 0xffffffffull) % 63 +
-       codon_set_count_half (s & 0xffffffffull) % 63;
+	 codon_set_count_half (s & 0xffffffffull) % 63;
 }
 
 inline bool changes_in_group (codon_set a, codon_set b, codon_set c, codon_set d) {
@@ -1270,70 +1249,121 @@ inline unsigned int choose_individual (double d, fitness_vector *v, population *
 
 \begin{ccode}
 typedef struct {
-  unsigned int	n;     		// Number of sequences per population
-  unsigned int	pairwise;	// Number of pairwise computations = n(n-1)/2
-  double	ng_site[3];	// Nei/Gojobori ratios at each nucleotide site index
-  unsigned int	ng_size[3];	// Nei/Gojobori sample size at each site index
-  unsigned int	multis[3];	// Multiplitons at given positions
-  unsigned int	multiplitons;	// Total multiplitons
+\end{ccode}
 
-  double	a1;		// Coefficients for variance calculation
-  double	a2;
-  double	b1;
-  double	b2;
-  double	c1;
-  double	c2;
-  double	e1;
-  double	e2;
+      \subsubsection{Variance coefficients}
 
-  double	ng_bias;
-  double	ng_var;
-  double	gl_bias;
-  double	gl_var;
-  double	rn_bias;
-  double	rn_var;
+	We need to compute some coefficients to find the variance of Tajima's
+	\D{}. These are described in more detail in section
+	\ref{sec:variance-coefficients}.
 
-  theta_array 	*site_syn;	// Actual measured site synonymity
-  theta_array 	*site_non;	// Actual measured site nonsynonymity
-  theta_array 	*ng_syn;
-  theta_array 	*ng_non;
-  theta_array 	*gl_syn;
-  theta_array 	*gl_non;
-  theta_array 	*rn_syn;
-  theta_array 	*rn_non;
+\begin{ccode}
+  unsigned int		n;     		// Number of sequences per population
+  double		a1, a2, b1, b2,
+			c1, c2, e1, e2;	// Coefficients for variance calculation
+\end{ccode}
 
-  double	s_syn;		// Aggregate synonymity of segregating sites
-  double	s_non;		// # segregating sites - s_syn
-  double	pi_syn;		// Aggregate synonymity of pairwise differences
-  double	pi_non;		// # pairwise differences - pi_syn
-  double	theta_syn;	// s_syn / pairwise
-  double	theta_non;	// s_non / pairwise
-  double	d_syn;		// Tajima's D statistic for synonymous differences
-  double	d_non;		// Ditto for nonsynonymous differences
+      \subsubsection{Final results}
+
+	We compile the results below into final measurements such as $s_{syn}$,
+	$s_{non}$, $\theta_{syn}$, $\theta_{non}$, and $D_{syn}$ and $D_{non}$.
+
+\begin{ccode}
+  double		s_syn,		s_non;
+  double		theta_syn,	theta_non;
+  double		pi_syn,		pi_non;
+  double		d_syn,		d_non;
+\end{ccode}
+
+      \subsubsection{Discrete pi data}
+
+	The discrete pi statistical estimator uses discrete pathways. For this,
+        we don't collect any data ahead of time, so we just use a site statistic
+	to store the results.
+
+\begin{ccode}
+  site_statistic	discrete_pi_estimates;
+\end{ccode}
+
+      \subsubsection{Continuous pi data}
+
+	If we create a continuous pairwise estimator, then we'll need to solve a
+	$64 \times 64$ system of linear equations and store the results here.
+	For now, however, this is not implemented.
+
+      \subsubsection{Parsimonious segregation estimates}
+
+	One aspect of the data that is not explicitly estimated is the
+	segregation of a site. In the case of homoplasy, we might end up with a
+	site that segregates but that segregation is hidden (or the extent of
+	the segregation is not accurately portrayed by the sample). By default,
+	we assume maximum parsimony; thus, if a site shows variance, then it is
+	variant; otherwise, it is assumed to not have been variant. To store
+	this data, we use a $3 \times 64$ matrix of doubles. While
+	floating-point numbers do not reflect the needs of this estimator
+	exactly, we use them for compatibility if we decide later to implement a
+	maximum-likelihood segregation estimator later on.
+
+\begin{ccode}
+  double		pseg_estimates[3][64];
+\end{ccode}
+
+      \subsubsection{Parsimonious genetic likelihoods}
+
+	Genetic likelihood data consists of three 64-element vectors, where each
+	entry represents the number of nonsynonymous changes present at the
+	given codon at the given position.
+
+\begin{ccode}
+  double		gl_data[3][64];
+  site_statistic	gl_estimates;
+\end{ccode}
+
+      \subsubsection{Discrete Nei and Gojobori ratios}
+
+	Nei and Gojobori ratios are computed ahead of time for a sample. We
+	store the number of singletons at each site and the ratio of those
+	singletons that were nonsynonymous. We also keep track of the number of
+	times the singleton data was used to estimate the nonsynonymity of a
+	multipliton (for auditing purposes).
+
+\begin{ccode}
+  double		dng_data[3];
+  unsigned int		dng_size[3];
+  unsigned int		dng_multiplitons[3];
+  site_statistic	dng_estimates;
+\end{ccode}
+
+      \subsubsection{Generic initialization methods}
+
+	This concludes the data elements of the statistical structure. We also
+	define methods to initialize and destroy statistics.
+
+\begin{ccode}
 } statistics;
 
 void initialize_statistics (statistics *s) {
   // The most important initialization to perform is that we need to make sure
   // that the site_syn and site_non pointers refer to valid objects.
-  s->site_syn = create_theta_array ();
-  s->site_non = create_theta_array ();
-  s->ng_syn = create_theta_array   ();
-  s->ng_non = create_theta_array   ();
-  s->gl_syn = create_theta_array   ();
-  s->gl_non = create_theta_array   ();
-  s->rn_syn = create_theta_array   ();
-  s->rn_non = create_theta_array   ();
+  s->site_syn = create_site_statistic ();
+  s->site_non = create_site_statistic ();
+  s->ng_syn = create_site_statistic   ();
+  s->ng_non = create_site_statistic   ();
+  s->gl_syn = create_site_statistic   ();
+  s->gl_non = create_site_statistic   ();
+  s->rn_syn = create_site_statistic   ();
+  s->rn_non = create_site_statistic   ();
 }
 
 void delete_statistics (statistics *s) {
-  delete_theta_array (s->site_syn); free (s->site_syn); s->site_syn = NULL;
-  delete_theta_array (s->site_non); free (s->site_non); s->site_non = NULL;
-  delete_theta_array (s->ng_syn);   free (s->ng_syn);	s->ng_syn = NULL;
-  delete_theta_array (s->ng_non);   free (s->ng_non);	s->ng_non = NULL;
-  delete_theta_array (s->gl_syn);   free (s->gl_syn);	s->gl_syn = NULL;
-  delete_theta_array (s->gl_non);   free (s->gl_non);	s->gl_non = NULL;
-  delete_theta_array (s->rn_syn);   free (s->rn_syn);	s->rn_syn = NULL;
-  delete_theta_array (s->rn_non);   free (s->rn_non);	s->rn_non = NULL;
+  delete_site_statistic (s->site_syn); free (s->site_syn); s->site_syn = NULL;
+  delete_site_statistic (s->site_non); free (s->site_non); s->site_non = NULL;
+  delete_site_statistic (s->ng_syn);   free (s->ng_syn);	s->ng_syn = NULL;
+  delete_site_statistic (s->ng_non);   free (s->ng_non);	s->ng_non = NULL;
+  delete_site_statistic (s->gl_syn);   free (s->gl_syn);	s->gl_syn = NULL;
+  delete_site_statistic (s->gl_non);   free (s->gl_non);	s->gl_non = NULL;
+  delete_site_statistic (s->rn_syn);   free (s->rn_syn);	s->rn_syn = NULL;
+  delete_site_statistic (s->rn_non);   free (s->rn_non);	s->rn_non = NULL;
 }
 \end{ccode}
 
@@ -1529,16 +1559,16 @@ void compute_theta (population *p, simulation_parameters *sp, statistics *result
   // Populates the theta portion of the statistics. Requires that Nei and
   // Gojobori data already be calculated.
   result->s_syn = result->s_non = 0.0;
-  ensure_theta_array (result->site_syn, p->data[0].length);
-  ensure_theta_array (result->site_non, p->data[0].length);
+  ensure_site_statistic (result->site_syn, p->data[0].length);
+  ensure_site_statistic (result->site_non, p->data[0].length);
 
   if (sp->full_tracing) {
-    ensure_theta_array (result->ng_syn, p->data[0].length);
-    ensure_theta_array (result->ng_non, p->data[0].length);
-    ensure_theta_array (result->gl_syn, p->data[0].length);
-    ensure_theta_array (result->gl_non, p->data[0].length);
-    ensure_theta_array (result->rn_syn, p->data[0].length);
-    ensure_theta_array (result->rn_non, p->data[0].length);
+    ensure_site_statistic (result->ng_syn, p->data[0].length);
+    ensure_site_statistic (result->ng_non, p->data[0].length);
+    ensure_site_statistic (result->gl_syn, p->data[0].length);
+    ensure_site_statistic (result->gl_non, p->data[0].length);
+    ensure_site_statistic (result->rn_syn, p->data[0].length);
+    ensure_site_statistic (result->rn_non, p->data[0].length);
   }
 
   for (unsigned int i = 0; i < p->data[0].length; i++)
@@ -1583,32 +1613,32 @@ void compute_theta (population *p, simulation_parameters *sp, statistics *result
 	  double co_est    = 0.0;
 	  double non       = ng_factor * ng_est;
 
-	 // Count the occurrence of the multipliton.
-	 result->multis[j]++;
+	  // Count the occurrence of the multipliton.
+	  result->multis[j]++;
 
-	 if (co_factor > 0.0) {
-	   // Average out all of the combinatorial numbers for the given
-	   // codons. Weight by the frequency of each, so we actually get the
-	   // values from the population itself.
-	   double total = 0.0;
-	   for (unsigned int k = 0; k < p->length; k++)
-	     total += genetic_code_nonsyn_likelihoods[j][_idx(p->data[k].data[i])];
-	   co_est = total / (double) p->length;
-	   non += co_factor * co_est;
-	 }
+	  if (co_factor > 0.0) {
+	    // Average out all of the combinatorial numbers for the given
+	    // codons. Weight by the frequency of each, so we actually get the
+	    // values from the population itself.
+	    double total = 0.0;
+	    for (unsigned int k = 0; k < p->length; k++)
+	      total += genetic_code_nonsyn_likelihoods[j][_idx(p->data[k].data[i])];
+	    co_est = total / (double) p->length;
+	    non += co_factor * co_est;
+	  }
 
-	 result->site_syn->data[i] += 1.0 - non;
-	 result->site_non->data[i] += non;
+	  result->site_syn->data[i] += 1.0 - non;
+	  result->site_non->data[i] += non;
 
-	 if (sp->full_tracing) {
-	   result->ng_non->data[i]  += ng_est;
-	   result->ng_syn->data[i]  += 1.0 - ng_est;
-	   result->gl_non->data[i]  += co_est;
-	   result->gl_syn->data[i]  += 1.0 - co_est;
-	   result->rn_non->data[i]  += normalized_random ();
-	   result->rn_syn->data[i]  += 1.0 - result->rn_non->data[i];
-	 }
-       }
+	  if (sp->full_tracing) {
+	    result->ng_non->data[i]  += ng_est;
+	    result->ng_syn->data[i]  += 1.0 - ng_est;
+	    result->gl_non->data[i]  += co_est;
+	    result->gl_syn->data[i]  += 1.0 - co_est;
+	    result->rn_non->data[i]  += normalized_random ();
+	    result->rn_syn->data[i]  += 1.0 - result->rn_non->data[i];
+	  }
+	}
     }
     
     result->s_syn += result->site_syn->data[i];
@@ -1644,6 +1674,7 @@ inline double non_path_3 (codon _c1, codon i1, codon i2, codon _c2)
 
 inline double discrete_pathways_nonsynonymity (codon c1, codon c2, simulation_parameters *sp) {
   unsigned int nc = changes (c1, c2);
+
   if (nc == 0) {
     // No or three changes. We wouldn't be calling this procedure if there
     // weren't any changes, so there must be three. (Actually, everything
@@ -1689,15 +1720,15 @@ void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
   double multiplier = 1.0 / (double) result->pairwise;
   result->pi_syn = result->pi_non = 0.0;
 
-  // Go through each site looking for codon differences. When we   find them, then
-  // we use discrete pathways. The loop indices are optimized to   maximize cache
-  // hits, since sequential data is often loaded into cache very   readily.
+  // Go through each site looking for codon differences. When we find them, then
+  // we use discrete pathways. The loop indices are optimized to maximize cache
+  // hits, since sequential data is often loaded into cache very readily.
   for (unsigned int s1 = 0; s1 < p->length - 1; s1++)
     for (unsigned int s2 = s1 + 1; s2 < p->length; s2++)
       for (unsigned int pos = 0; pos < p->data[0].length; pos++)
 	if (p->data[s1].data[pos] != p->data[s2].data[pos]) {
 	  // Count the difference.
-	  unsigned int	n_changes  = changes (p->data[s1].data[pos],  p->data[s2].data[pos]);
+	  unsigned int	n_changes  = changes (p->data[s1].data[pos], p->data[s2].data[pos]);
 	  double	non_factor = discrete_pathways_nonsynonymity (
 	    p->data[s1].data[pos], p->data[s2].data[pos], sp);
 
@@ -1834,8 +1865,8 @@ unsigned int history_non_mutations (individual_history_node *child) {
   }
 }
 
-unsigned long long int count_mutations (population *p, simulation_parameters *sp, bool by_state,
-					unsigned int codon_index) {
+uint64_t count_mutations (population *p, simulation_parameters *sp, bool by_state,
+			  unsigned int codon_index) {
   // Returns the number of nonsynonymous and the number of total mutations that
   // have occurred since the MRCA of the population. The MRCA may be decided by
   // state or by descent; if by_state is true, then state is used; otherwise,
@@ -1892,7 +1923,7 @@ unsigned long long int count_mutations (population *p, simulation_parameters *sp
     current_generation--;
   }
 
-  return ((long long int) non_mutations << 32) | total_mutations;
+  return ((uint64_t) non_mutations << 32) | total_mutations;
 }
 
 void compute_tracked_changes (population *p, simulation_parameters *sp, statistics *result) {
@@ -1903,15 +1934,16 @@ void compute_tracked_changes (population *p, simulation_parameters *sp, statisti
   result->gl_bias = result->gl_var = 0.0;
   result->rn_bias = result->rn_var = 0.0;
   result->multiplitons = 0;
+
   for (unsigned int ci = 0; ci < p->data[0].length; ci++)
     if (codon_set_multipliton (theta_site_set (p, ci))) {
       // Test the estimators here. We don't test them on singleton sites at the
       // moment, nor do we test our assumptions about homoplasy by investigating
       // invariant sites.
 
-      unsigned long long int mutation_counts = count_mutations (p, sp, FALSE, ci);
-      unsigned int	     non_mutations   = mutation_counts >> 32;
-      unsigned int	     total_mutations = mutation_counts & 0xffffffffull;
+      uint64_t		mutation_counts = count_mutations (p, sp, FALSE, ci);
+      unsigned int	non_mutations   = mutation_counts >> 32;
+      unsigned int	total_mutations = mutation_counts & 0xffffffffull;
 
       if (total_mutations != 0) {
         double actual_non = (double) non_mutations /
@@ -2189,6 +2221,7 @@ inline void consider_drift_on_fitness (population *parents, unsigned int generat
                     sp->result_fitness_vector);
   }
 }
+
 inline void do_trace_recombination (unsigned int split_point, unsigned int generation,
 				    unsigned int child_index, unsigned int p1, unsigned int p2,
 				    population *parents, population *children,
