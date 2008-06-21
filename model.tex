@@ -246,7 +246,7 @@ end-of-options
           Sets the recombination rate per individual per generation. By default,
           this is set to $2.4 \times 10^{-5}$.
 
-          \item[ancestral-sequence: $s$;]
+          \item[ancestral-sequence: $s$]
           Sets the ancestral sequence $s$ used to create the initial population.
           by default, this is set to the sequence {\tt UGU ACA AGA AAC AAC AAU
           ACA AUA AAA AGU AUA CAU AUG GGA CUA GGG AGG ACA UUU UAU ACA ACA GGA
@@ -403,8 +403,8 @@ frequency-c: 0.09
 frequency-g: 0.009
 frequency-u: 0.001
 
-ancestral-sequence: ACA-UCU-GGG;
-purifying-optimal-sequence: UUU-GGG-AAA;
+ancestral-sequence: ACA-UCU-GGG
+purifying-optimal-sequence: UUU-GGG-AAA
 selection-model: purifying
 selection-coefficient: 0.5
 EOF
@@ -592,22 +592,22 @@ typedef struct { \
 #define __ensure_function_simple__(parent_type, child_type) \
 inline void ensure_##parent_type (parent_type *s, unsigned int length) { \
   if (s->length != length) { \
-   if (s->data) \
+    if (s->data) \
       free (s->data); \
-   s->data = (child_type*) safe_malloc (length * sizeof (child_type)); \
-   s->length = length; \
+    s->data = (child_type*) safe_malloc (length * sizeof (child_type)); \
+    s->length = length; \
   } \
 }
 
 #define __ensure_function_complex__(parent_type, child_type) \
 inline void ensure_##parent_type (parent_type *s, unsigned int length) { \
   if (s->length != length) { \
-   for (unsigned int i = 0; i < s->length; i++) \
+    for (unsigned int i = 0; i < s->length; i++) \
       delete_##child_type (s->data + i); \
-   free (s->data); \
-   s->data = (child_type*) safe_malloc (length * sizeof (child_type)); \
-   s->length = length; \
-   for (unsigned int i = 0; i < s->length; i++) { \
+    free (s->data); \
+    s->data = (child_type*) safe_malloc (length * sizeof (child_type)); \
+    s->length = length; \
+    for (unsigned int i = 0; i < s->length; i++) { \
       s->data[i].data = NULL; \
       s->data[i].length = 0; \
    } \
@@ -630,20 +630,20 @@ inline parent_type *create_##parent_type () { \
 #define __delete_function_simple__(parent_type, child_type) \
 inline void delete_##parent_type (parent_type *s) { \
   if (s) { \
-   free (s->data); \
-   s->data = NULL; \
-   s->length = 0; \
+    free (s->data); \
+    s->data = NULL; \
+    s->length = 0; \
   } \
 }
 
 #define __delete_function_complex__(parent_type, child_type) \
 inline void delete_##parent_type (parent_type *s) { \
   if (s) { \
-   for (unsigned int i = 0; i < s->length; i++) \
+    for (unsigned int i = 0; i < s->length; i++) \
       delete_##child_type (s->data + i); \
-   free (s->data); \
-   s->data = NULL; \
-   s->length = 0; \
+    free (s->data); \
+    s->data = NULL; \
+    s->length = 0; \
   } \
 }
 
@@ -1228,7 +1228,8 @@ sequence *read_sequence (const char *input) {
   sequence *result 	= create_sequence ();
 
   if (input[0] == '!') {
-    // Read a packed-form sequence.
+    // Read a packed-form sequence. We start at one to skip over the leading
+    // exclamation point.
     for (unsigned int i = 1; i < strlen (input); i++)
       if ((input[i] >= 'A' && input[i] <= 'Z') ||
 	  (input[i] >= 'a' && input[i] <= 'z') ||
@@ -1250,18 +1251,24 @@ sequence *read_sequence (const char *input) {
       else if (input[i] == '/')
 	result->data[position++] = 63;
   } else {
-    // Read a nucleotide-form sequence.
-    for (unsigned int i = 1; i < strlen (input); i++)
+    // Read a nucleotide-form sequence. We start at zero in this case because
+    // there was no leading exclamation point.
+    for (unsigned int i = 0; i < strlen (input); i++)
       if (input[i] == 'A' || input[i] == 'C' || input[i] == 'G' ||
 	  input[i] == 'T' || input[i] == 'U')
 	l++;
+
+    if (l % 3) {
+      fprintf (stderr, "Error: Nucleotide-form sequence being read (%s) has an incomplete codon.\n", input);
+      exit (EXIT_FAILURE);
+    }
 
     ensure_sequence (result, l / 3);
 
     for (unsigned int i = 0; i < l / 3; i++)
       result->data[i] = 0;
 
-    for (unsigned int i = 1; i < strlen (input); i++)
+    for (unsigned int i = 0; i < strlen (input); i++)
       switch (input[i]) {
 	case 'A': set_nucleotide_at_position (result, _a, position++); break;
 	case 'C': set_nucleotide_at_position (result, _c, position++); break;
@@ -1487,6 +1494,11 @@ void initialize_simulation_parameters (simulation_parameters *sp) {
   sp->m.subdivision.start			= 200;
   sp->m.subdivision.duration			= 500;
   sp->m.subdivision.size			= 50;
+
+  sp->i.parent_fitness_vector			= NULL;
+  sp->i.child_fitness_vector			= NULL;
+  sp->i.result_fitness_vector			= NULL;
+  sp->i.history					= NULL;
 }
 
 void delete_simulation_parameters (simulation_parameters *sp) {
@@ -1839,6 +1851,8 @@ void compute_genetic_likelihoods (population *p, simulation_parameters *sp, stat
 	  result->gl_data[p][c] += 1.0 / 3.0;
     }
 
+  ensure_site_statistic (&result->gl_site_non, p->data[0].length);
+
   // Now estimate these likelihoods across sites.
   for (unsigned int i = 0; i < p->data[0].length; i++) {
     result->gl_site_non.data[i] = 0.0;
@@ -2044,6 +2058,9 @@ void compute_theta (population *p, simulation_parameters *sp, statistics *result
   
   result->s_syn = result->s_non = 0.0;
 
+  for (unsigned int i = 0; i < 3; i++)
+    result->dng_multiplitons[i] = 0;
+
   ensure_site_statistic (&result->theta_site_seg, p->data[0].length);
   ensure_site_statistic (&result->theta_site_non, p->data[0].length);
 
@@ -2133,6 +2150,9 @@ void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
   // Fills in the pi computations of the statistical structure.
   double multiplier = 1.0 / (double) (p->length * (p->length - 1) / 2);
   result->pi_syn = result->pi_non = 0.0;
+
+  ensure_site_statistic (&result->discrete_pi_seg, p->data[0].length);
+  ensure_site_statistic (&result->discrete_pi_non, p->data[0].length);
 
   // Go through each site looking for codon differences. When we find them, then
   // we use discrete pathways.
@@ -2901,8 +2921,12 @@ void read_trial (simulation_parameters *sp, population *parents, population *chi
   char s[65536];
   for (unsigned int i = 0; i < sp->g.population_size; i++) {
     scanf ("%65535s", s);
+    sequence *seq = NULL;
     delete_sequence (parents->data + i);
-    parents->data[i] = *read_sequence (s);
+    seq = read_sequence (s);
+    copy_sequence (seq, parents->data + i);
+    delete_sequence (seq);
+    free (seq);
   }
 }
 
@@ -2916,9 +2940,7 @@ void allocate_internal_memory (simulation_parameters *sp) {
     ensure_fitness_vector (sp->i.parent_fitness_vector, sp->g.population_size);
     ensure_fitness_vector (sp->i.child_fitness_vector,  sp->g.population_size);
     ensure_fitness_vector (sp->i.result_fitness_vector, sp->g.population_size);
-  } else
-    sp->i.parent_fitness_vector = sp->i.child_fitness_vector =
-      sp->i.result_fitness_vector = NULL;
+  }
 
   if (sp->o.full_tracing) {
     sp->i.history = create_population_history ();

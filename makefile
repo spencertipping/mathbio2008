@@ -4,10 +4,29 @@ CC_OPTS		= -O3 -mtune=native -std=c99 -fgnu89-inline -lm -Wall -g
 SD		= sd
 SD_OPTS		= --no-cpp --extension=h --literal-language=ccode --line-comment=//
 
+LATEX		= latex
+PDFLATEX	= pdflatex
+TEX_OPTS	=
+
 VALGRIND	= valgrind
-VALGRIND_OPTS	=
+VALGRIND_OPTS	= --leak-check=full -v --show-reachable=yes
+CACHEGRIND_OPTS	= --tool=cachegrind
+
+.PHONY: bin cache doc mem
 
 bin: model-runtime model-debug
+
+cache: model-debug
+	$(VALGRIND) $(CACHEGRIND_OPTS) ./$< < profiles/cache
+
+doc: model.pdf
+
+mem: model-debug
+	$(VALGRIND) $(VALGRIND_OPTS) ./$< < profiles/mem1 || echo
+	$(VALGRIND) $(VALGRIND_OPTS) ./$< < profiles/mem2 | $(VALGRIND) $(VALGRIND_OPTS) ./$< || echo
+
+prof: model-debug
+	$< < profiles/prof && $(GPROF) $(GPROF_OPTS) $< > prof
 
 model-runtime: ca-rng.h model.h model-runtime.c
 	$(CC) $(CC_OPTS) -o $@ model-runtime.c
@@ -15,14 +34,8 @@ model-runtime: ca-rng.h model.h model-runtime.c
 model-debug: ca-rng.h model.h model-runtime.c
 	$(CC) $(CC_OPTS) -fno-inline -pg -o $@ model-runtime.c
 
-mem: model-debug
-	$(VALGRIND) $(VALGRIND_OPTS) ./$< < profiles/mem
+%.pdf: %.tex
+	$(LATEX) $(TEX_OPTS) $< && $(PDFLATEX) $(TEX_OPTS) $<
 
-doc: model.pdf
-
-model.pdf: model.tex
-	latex $<
-	pdflatex $<
-
-model.h: model.tex
+%.h: %.tex
 	$(SD) $(SD_OPTS) $<
