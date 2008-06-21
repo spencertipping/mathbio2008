@@ -119,7 +119,19 @@ $
 
 	  Note that if the run is interrupted and a trial is not finished, the
 	  output may not be usable without modification because it will not
-	  contain as many trials as are indicated by the header.
+	  contain as many trials as are indicated by the header. Profiles
+	  generated with this option should look like this:
+
+	  \begin{verbatim}
+trials: 100
+population-size: 500
+statistics-only
+end-of-options
+
+!2naAS+a/GAuga12
+!7hSGJas2jtswdug
+[...]
+	  \end{verbatim}
 
           \item[print-each-generation]
           Specifying this directive will cause the simulation to print
@@ -141,10 +153,9 @@ $
 	These directives alter the nature of the processing done by the program.
 	For example, sometimes statistical computations should be omitted, or
 	they should be performed on sequences that are loaded from a file
-	instead of produced internally. Because these directives often specify
-	complex behavior, they have a nonstandard syntax.
-
-	{\em Note: These directives are subject to change.}
+	instead of produced internally. By default, the simulation will be run
+	and statistical analysis will be performed on the sequences from the
+	simulation, however either one of these steps may be deferred.
 
 	\begin{enumerate}
 	  \item[simulation-only]
@@ -157,18 +168,33 @@ $
 	  for those packed sequences.
 
 	  \item[statistics-only]
-	  Specifying this directive disables the simulation code and enables the
-	  \verb|import-sequences| directive. The purpose of specifying this
-	  would be to load sequences from a file instead of generating them.
-	  Obviously, this directive is incompatible with \verb|simulation-only|.
+	  Specifying this directive disables the simulation code and requires
+	  that sequences are present in the profile. The purpose of specifying
+	  this would be to load sequences from a file instead of generating
+	  them. Obviously, this directive is incompatible with
+	  \verb|simulation-only|.
 
-	  \item[import-sequences $m$ $n$ $s_1\ s_2\ \cdots$]
-	  This directive is available only if \verb|statistics-only| has been
-	  specified. $m$ is the number of trials, $n$ is the number of sequences
-	  to import per trial, and each of $s_1$, $s_2$, etc. is a valid
-	  sequence in packed or unpacked form (see section
-	  \ref{sec:sequence-forms}). These sequences are then statistically
-	  analyzed.
+	  \item[end-of-options]
+	  Specifying this directive stops profile parsing. The reason you would
+	  want to use this is to provide sequences for statistical analysis
+	  after the options. In this scenario, your profile might look like
+	  this:
+
+	  \begin{verbatim}
+trials: 1
+population-size: 10
+sample-size: 4
+statistics-only
+end-of-options
+
+!A8bh+/a8sc
+!a8sghAH/as
+[...]
+	  \end{verbatim}
+
+	  No comments may appear after the \verb|end-of-options| directive, as
+	  they will be treated as sequence data in the event that sequences are
+	  to be read.
 	\end{enumerate}
 
       \subsubsection{General-purpose biological directives}
@@ -1759,8 +1785,8 @@ void compute_theta_site (population *p, simulation_parameters *sp, statistics *r
 	if (set_mask & (1 << (j * 2))) {
 	  // The condition on this if statement is just a way of determining
 	  // whether we see mutation at a given nucleotide site.
-	  double nc        = sp->assumed_gl_variance * (double) result->ng_size[j];
-	  double ng_factor = (sp->assumed_gl_variance == 0.0) ?
+	  double nc        = sp->i.assumed_gl_variance * (double) result->ng_size[j];
+	  double ng_factor = (sp->i.assumed_gl_variance == 0.0) ?
 			       ((result->ng_size[j] > 0) ? 1.0 : 0.0) :
 			       nc / (1.0 + nc);
 	  double co_factor = 1.0 - ng_factor;
@@ -2045,38 +2071,38 @@ uint64_t count_mutations (population *p, simulation_parameters *sp, bool by_stat
   // have occurred since the MRCA of the population. The MRCA may be decided by
   // state or by descent; if by_state is true, then state is used; otherwise,
   // descent is used. This function assumes a maximum population size of
-  // sp->population_size, since the population is often from the sample and does
+  // sp->g.population_size, since the population is often from the sample and does
   // not represent the entire evolving population. The result is encoded such
   // that the number of non mutations occupies the high 32 bits and the total
   // number of mutations occupies the low 32 bits.
 
-  bool        *individuals_seen 	= (bool*) malloc (sizeof (bool) * sp->population_size);
-  bool        *last_individuals_seen	= (bool*) malloc (sizeof (bool) * sp->population_size);
+  bool        *individuals_seen 	= (bool*) malloc (sizeof (bool) * sp->g.population_size);
+  bool        *last_individuals_seen	= (bool*) malloc (sizeof (bool) * sp->g.population_size);
   bool        *temp			= NULL;
   unsigned int non_mutations		= 0;
   unsigned int total_mutations		= 0;
-  unsigned int current_generation	= sp->generations - 1;
+  unsigned int current_generation	= sp->g.generations - 1;
 
   // Initialize to have seen only the individuals in the population.
-  for (unsigned int i = 0; i < sp->population_size; i++)
+  for (unsigned int i = 0; i < sp->g.population_size; i++)
     individuals_seen[i] = (i < p->length);
 
   // Now backtrace until only one element in individuals_seen is set.
   while (current_generation >= 0 &&
         ! (by_state ?
-            is_mrca_state (individuals_seen, sp->population_size,
-			   sp->history->data + current_generation, codon_index) :
-            is_mrca_descent (individuals_seen, sp->population_size))) {
+            is_mrca_state (individuals_seen, sp->g.population_size,
+			   sp->i.history->data + current_generation, codon_index) :
+            is_mrca_descent (individuals_seen, sp->g.population_size))) {
 
     // Go back one generation. This means rounding up all of the parents and
     // adding them to the last_individuals_seen array. Then we swap the two
     // arrays and decrement the current generation.
-    for (unsigned int i = 0; i < sp->population_size; i++)
+    for (unsigned int i = 0; i < sp->g.population_size; i++)
       last_individuals_seen[i] = FALSE;
 
-    for (unsigned int i = 0; i < sp->population_size; i++)
+    for (unsigned int i = 0; i < sp->g.population_size; i++)
       if (individuals_seen[i]) {
-        individual_history *h = sp->history->data[current_generation].data + i;
+        individual_history *h = sp->i.history->data[current_generation].data + i;
 
         // Find this guy's parent(s) and mark them as having been seen.
         last_individuals_seen[h->data[codon_index].parent_index] = TRUE;
@@ -2204,7 +2230,7 @@ void compute_estimator_accuracy (population *p, simulation_parameters *sp, stati
 typedef struct {
   unsigned int		trials;
   bool			print_sequences;
-  bool			make_output;
+  bool			make_profile;
   bool			print_each_generation;
   bool			full_tracing;
 } output_parameters;
@@ -2312,30 +2338,31 @@ struct _simulation_parameters {
   general_parameters		g;
   model_parameters		m;
   simulation_internal_data	i;
+  char				*image_name;
 };
 
 void initialize_simulation_parameters (simulation_parameters *sp) {
   struct timeval tv;
   gettimeofday (&tv, NULL);
 
-  sp->i.random_seed                          = tv.tv_sec ^ tv.tv_usec;
-  sp->o.trials                     = 50;
-  sp->g.population_size                      = 500;
-  sp->g.generations                          = 1000;
-  sp->g.sample_size                          = 20;
+  sp->i.random_seed                     	= tv.tv_sec ^ tv.tv_usec;
+  sp->o.trials                     		= 50;
+  sp->g.population_size				= 500;
+  sp->g.generations				= 1000;
+  sp->g.sample_size				= 20;
 
-  sp->g.selection_model                      = NEUTRAL_SELECTION;
-  sp->g.drift_model                          = NEUTRAL_DRIFT;
+  sp->g.selection_model				= NEUTRAL_SELECTION;
+  sp->g.drift_model				= NEUTRAL_DRIFT;
 
-  sp->g.mutation.frequency_a      = 0.25;
-  sp->g.mutation.frequency_c      = 0.25;
-  sp->g.mutation.frequency_g      = 0.25;
-  sp->g.mutation.frequency_u      = 0.25;
-  sp->g.mutation.mutations_per_nucleotide = 3.4e-5;
-  sp->g.mutation.transitions_per_transversion = 1.3;
+  sp->g.mutation.frequency_a			= 0.25;
+  sp->g.mutation.frequency_c			= 0.25;
+  sp->g.mutation.frequency_g			= 0.25;
+  sp->g.mutation.frequency_u			= 0.25;
+  sp->g.mutation.mutations_per_nucleotide	= 3.4e-5;
+  sp->g.mutation.transitions_per_transversion	= 1.3;
 
-  sp->g.recombination_rate                   = 2.5e-5;
-  sp->i.assumed_gl_variance                  = 0.0;
+  sp->g.recombination_rate			= 2.5e-5;
+  sp->i.assumed_gl_variance			= 0.0;
 
   sp->g.ancestral_sequence = read_sequence (
     "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
@@ -2344,21 +2371,21 @@ void initialize_simulation_parameters (simulation_parameters *sp) {
     "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
     "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
 
-  sp->m.purifying.selection_coefficient      = 0.1;
-  sp->m.diversifying.selection_coefficient = 0.1;
-  sp->o.print_sequences                      = FALSE;
-  sp->o.print_each_generation                = FALSE;
-  sp->o.full_tracing                         = FALSE;
+  sp->m.purifying.selection_coefficient		= 0.1;
+  sp->m.diversifying.selection_coefficient	= 0.1;
+  sp->o.print_sequences				= FALSE;
+  sp->o.print_each_generation			= FALSE;
+  sp->o.full_tracing				= FALSE;
+  sp->o.make_profile				= FALSE;
 
-  sp->m.bottleneck.start               = 200;
-  sp->m.bottleneck.duration            = 500;
-  sp->m.bottleneck.size                = 50;
+  sp->m.bottleneck.start			= 200;
+  sp->m.bottleneck.duration			= 500;
+  sp->m.bottleneck.size				= 50;
 
-  sp->m.subdivision.start               = 200;
-  sp->m.subdivision.duration            = 500;
-  sp->m.subdivision.size                = 50;
+  sp->m.subdivision.start			= 200;
+  sp->m.subdivision.duration			= 500;
+  sp->m.subdivision.size			= 50;
 }
-
 
 void delete_simulation_parameters (simulation_parameters *sp) {
   // We do not free the image name because the memory for this is usually
@@ -2428,7 +2455,7 @@ inline nucleotide choose_nucleotide (nucleotide existing, hky85_params *p) {
 
 inline void mutate_sequence (sequence *s, simulation_parameters *sp,
 			     unsigned int generation, unsigned int individual) {
-  hky85_params *p = &sp->m.mutation_parameters;
+  hky85_params *p = &sp->m.mutation;
   double given_probability = pow (1.0 - p->mutations_per_nucleotide, s->length * 3);
 
   while (normalized_random () > given_probability) {
@@ -2441,11 +2468,11 @@ inline void mutate_sequence (sequence *s, simulation_parameters *sp,
 		   choose_nucleotide (pick (s->data[position / 3], position % 3), p),
 		   position % 3);
 
-    if (sp->full_tracing)
+    if (sp->o.full_tracing)
       // Record the new codon state in the appropriate slot.
       // We explicitly don't alter the original codon because its state is lost,
       // and we need to track multiple mutations.
-      sp->history->data[generation].data[individual].data[position / 3].state_after_mutation = new_codon;
+      sp->i.history->data[generation].data[individual].data[position / 3].state_after_mutation = new_codon;
 
     s->data[position / 3] = new_codon;
     
@@ -2477,14 +2504,14 @@ inline void mutate_sequence (sequence *s, simulation_parameters *sp,
 \begin{ccode}
 inline double purifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
   double	result          = 1.0;
-  double	drop_factor     = 1.0 - sp->purifying_selection_coefficient;
+  double	drop_factor     = 1.0 - sp->m.purifying.selection_coefficient;
   unsigned int	i            	= 0;
 
   for (i = 0; i < p->data[idx].length; i++)
     if (amino_lookup[(unsigned int) _idx(p->data[idx].data[i])] == sto ||
-	amino_lookup[(unsigned int) _idx(sp->purifying_optimal_sequence->data[i])] == sto)
+	amino_lookup[(unsigned int) _idx(sp->m.purifying.optimal_sequence->data[i])] == sto)
       break;
-    else if (! synonymous (p->data[idx].data[i], sp->purifying_optimal_sequence->data[i]))
+    else if (! synonymous (p->data[idx].data[i], sp->m.purifying.optimal_sequence->data[i]))
       result *= drop_factor;
 
   // Take into account stop codons. Anything after the first stop codon is a
@@ -2538,10 +2565,10 @@ inline double diversifying_selection (population *p, unsigned int idx, simulatio
 inline double sharp_population_bottleneck (
     unsigned int generation, unsigned int parent_idx,
     unsigned int child_idx, simulation_parameters *sp) {
-  if (generation >= sp->sharp_bottleneck_start &&
-      generation < sp->sharp_bottleneck_start + sp->sharp_bottleneck_duration &&
-      (parent_idx > sp->sharp_bottleneck_size ||
-       child_idx > sp->sharp_bottleneck_size))
+  if (generation >= sp->m.bottleneck.start &&
+      generation < sp->m.bottleneck.start + sp->m.bottleneck.duration &&
+      (parent_idx > sp->m.bottleneck.size ||
+       child_idx > sp->m.bottleneck.size))
     // This interaction is subject to a bottleneck.
     return 0.0;
   else
@@ -2562,9 +2589,9 @@ inline double sharp_population_bottleneck (
 inline double even_population_subdivision (
     unsigned int generation, unsigned int parent_idx,
     unsigned int child_idx, simulation_parameters *sp) {
-  unsigned int denom = sp->population_size / sp->even_subdivision_size;
-  if (generation >= sp->even_subdivision_start &&
-      generation < sp->even_subdivision_start + sp->even_subdivision_duration &&
+  unsigned int denom = sp->g.population_size / sp->m.subdivision.size;
+  if (generation >= sp->m.subdivision.start &&
+      generation < sp->m.subdivision.start + sp->m.subdivision.duration &&
       parent_idx / denom != child_idx / denom)
     return 0.0;
   else
@@ -2585,7 +2612,7 @@ inline void populate_parent_fitness (population *parents, simulation_parameters 
   for (unsigned int i = 0; i < parents->length; i++) {
     double current;
 
-    switch (sp->selection_model) {
+    switch (sp->g.selection_model) {
       case DIVERSIFYING_SELECTION:
 	current = diversifying_selection (parents, i, sp);
 	break;
@@ -2597,19 +2624,19 @@ inline void populate_parent_fitness (population *parents, simulation_parameters 
 	exit (EXIT_FAILURE);
     }
 
-    sp->parent_fitness_vector->data[i] = current +
-      ((i > 0) ? sp->parent_fitness_vector->data[i - 1] : 0.0);
+    sp->i.parent_fitness_vector->data[i] = current +
+      ((i > 0) ? sp->i.parent_fitness_vector->data[i - 1] : 0.0);
   }
 }
 
 inline void consider_drift_on_fitness (population *parents, unsigned int generation,
 				       unsigned int child_index, simulation_parameters *sp) {
   // Multiplies drift into the resulting fitness vector.
-  if (sp->drift_model != NEUTRAL_DRIFT) {
+  if (sp->g.drift_model != NEUTRAL_DRIFT) {
     for (unsigned int i = 0; i < parents->length; i++) {
       double current;
 
-      switch (sp->drift_model) {
+      switch (sp->g.drift_model) {
         case SHARP_BOTTLENECK_DRIFT:
 	  current = sharp_population_bottleneck (generation, i, child_index, sp);
 	  break;
@@ -2621,12 +2648,12 @@ inline void consider_drift_on_fitness (population *parents, unsigned int generat
 	  exit (EXIT_FAILURE);
       }
 
-      sp->child_fitness_vector->data[i] = current +
-        ((i > 0) ? sp->child_fitness_vector->data[i - 1] : 0.0);
+      sp->i.child_fitness_vector->data[i] = current +
+        ((i > 0) ? sp->i.child_fitness_vector->data[i - 1] : 0.0);
     }
 
-    fitness_vector_mul (sp->parent_fitness_vector, sp->child_fitness_vector,
-                    sp->result_fitness_vector);
+    fitness_vector_mul (sp->i.parent_fitness_vector, sp->i.child_fitness_vector,
+			sp->i.result_fitness_vector);
   }
 }
 
@@ -2636,11 +2663,11 @@ inline void do_trace_recombination (unsigned int split_point, unsigned int gener
 				    simulation_parameters *sp) {
   // Fills in the history for the given individual based on the fact that a
   // recombination event occurred.
-  if (sp->full_tracing) {
+  if (sp->o.full_tracing) {
     // Inherit a bunch of codon histories from parent 1 and parent 2.
     for (unsigned int i = 0; i < split_point / 3; i++) {
       individual_history_node *n =
-        sp->history->data[generation].data[child_index].data + i;
+        sp->i.history->data[generation].data[child_index].data + i;
       n->parent_index = p1;
       n->recombination_nucleotide = 0;
       n->other_parent_index = 0xfffffffful;
@@ -2650,7 +2677,7 @@ inline void do_trace_recombination (unsigned int split_point, unsigned int gener
 
     for (unsigned int i = split_point / 3 + 1; i < parents->data[p1].length; i++) {
       individual_history_node *n =
-        sp->history->data[generation].data[child_index].data + i;
+        sp->i.history->data[generation].data[child_index].data + i;
       n->parent_index = p2;
       n->recombination_nucleotide = 0;
       n->other_parent_index = 0xfffffffful;
@@ -2660,7 +2687,7 @@ inline void do_trace_recombination (unsigned int split_point, unsigned int gener
 
     // Now handle the mixed case.
     individual_history_node *n =
-      sp->history->data[generation].data[child_index].data + split_point / 3;
+      sp->i.history->data[generation].data[child_index].data + split_point / 3;
     n->parent_index = p1;
     n->recombination_nucleotide = (split_point % 3) ? split_point % 3 : 3;
     n->other_parent_index = p2;
@@ -2674,11 +2701,11 @@ inline void do_trace_inheritance (unsigned int child_index, unsigned int parent_
 				  simulation_parameters *sp) {
   // Fills in the history for an individual based on the fact that normal
   // inheritance occurred.
-  if (sp->full_tracing)
+  if (sp->o.full_tracing)
     // Trace the individual. If this is the first generation, then every
     // individual came from individual 0.
     for (unsigned int i = 0; i < children->data[child_index].length; i++) {
-      individual_history_node *n = sp->history->data[generation].data[child_index].data + i;
+      individual_history_node *n = sp->i.history->data[generation].data[child_index].data + i;
       n->parent_index = parent_index;
       n->recombination_nucleotide = 0;
       n->other_parent_index = 0xfffffffful;
@@ -2692,7 +2719,7 @@ inline void perform_inheritance (population *parents, population *children,
 				 fitness_vector *parent_fitness,
 				 simulation_parameters *sp) {
   // Inherits from either one or two parents, as appropriate.
-  if (normalized_random () < sp->recombination_rate) {
+  if (normalized_random () < sp->g.recombination_rate) {
     // Perform a recombination. This means that we choose two distinct parents
     // at random.
     unsigned int parent_1 = choose_individual (normalized_random (), parent_fitness, parents);
@@ -2725,20 +2752,20 @@ inline void choose_parents (population *parents, population *children,
   // Run through the population and recombine where necessary, performing simple
   // redirection where possible. There may be places where time could be saved
   // by pointer shuffling rather than data copies, but I'm not seeing them yet.
-  fitness_vector *resulting_vector = sp->parent_fitness_vector;
+  fitness_vector *resulting_vector = sp->i.parent_fitness_vector;
 
   // First, compute the fitness vector for the parents.
-  if (sp->selection_model != NEUTRAL_SELECTION)
+  if (sp->g.selection_model != NEUTRAL_SELECTION)
     populate_parent_fitness (parents, sp);
-  else if (sp->drift_model == NEUTRAL_DRIFT)
+  else if (sp->g.drift_model == NEUTRAL_DRIFT)
     resulting_vector = NULL; // A complete neutral model, so no biasing.
   else
     // No selection, so assume neutral fitness.
     for (unsigned int i = 0; i < parents->length; i++)
-      sp->parent_fitness_vector->data[i] = (double) (i + 1);
+      sp->i.parent_fitness_vector->data[i] = (double) (i + 1);
 
-  if (sp->drift_model != NEUTRAL_DRIFT)
-    resulting_vector = sp->result_fitness_vector;
+  if (sp->g.drift_model != NEUTRAL_DRIFT)
+    resulting_vector = sp->i.result_fitness_vector;
 
   for (unsigned int i = 0; i < children->length; i++) {
     consider_drift_on_fitness (parents, generation, i, sp);
@@ -2786,7 +2813,7 @@ void print_d_values (population *p, simulation_parameters *sp) {
   // length attribute of the population and then change it back.
 
   unsigned int old_length = p->length;
-  p->length = sp->sample_size;
+  p->length = sp->g.sample_size;
 
   statistics s;
   initialize_statistics 	(&s);
@@ -2802,7 +2829,7 @@ void print_d_values (population *p, simulation_parameters *sp) {
 	  s.dng_data[0], s.dng_data[1], s.dng_data[2],
 	  s.dng_multiplitons[0], s.dng_multiplitons[1], s.dng_multiplitons[2]);
 
-  if (sp->full_tracing) {
+  if (sp->o.full_tracing) {
     compute_estimator_accuracy 	(p, sp, &s);
 
     // Print out additional data about the accuracy of each estimator used.
@@ -2822,7 +2849,7 @@ void print_d_values (population *p, simulation_parameters *sp) {
 
 void print_trial_indicator (unsigned int current_trial, simulation_parameters *sp) {
   fprintf (stderr, "Image %s: Trial %d of %d\n",
-	   sp->i.image_name, current_trial, sp->o.trials);
+	   sp->image_name, current_trial, sp->o.trials);
 }
 \end{ccode}
 
@@ -2836,60 +2863,121 @@ void print_trial_indicator (unsigned int current_trial, simulation_parameters *s
 	less than a second, it may make some difference, especially when many
 	trials are executed.
 
-\begin{ccode}
-void run_trials (simulation_parameters *sp) {
-  initialize_genetic_likelihoods ();
+	Sometimes we run only the simulation or the statistics, so I've broken
+	up the code into separate functions to handle these cases.
 
+\begin{ccode}
+void simulate_trial (simulation_parameters *sp, population *parents, population *children) {
+  // Performs the simulation of a single trial.
+  for (unsigned int i = 0; i < sp->g.population_size; i++)
+    copy_sequence (sp->g.ancestral_sequence, parents->data + i);
+
+  for (unsigned int generation = 0; generation < sp->g.generations; generation++) {
+    choose_parents (parents, children, sp, generation);
+
+    // Swap the parents and children out now.
+    temporary = parents;
+    parents = children;
+    children = temporary;
+
+    if (sp->o.print_each_generation)
+     print_d_values (parents, sp);
+  }
+}
+
+void read_trial (simulation_parameters *sp, population *parents, population *children) {
+  // Reads a trial's worth of data from stdin into the parent population.
+  char s[65536];
+  for (unsigned int i = 0; i < sp->g.population_size; i++) {
+    scanf ("%65535s", s);
+    delete_sequence (parents->data + i);
+    parents->data[i] = *read_sequence (s);
+  }
+}
+
+void allocate_internal_memory (simulation_parameters *sp) {
+  // Handles the allocation of any simulation temporary space.
+  if (! sp->o.statistics_only) {
+    sp->i.parent_fitness_vector = create_fitness_vector ();
+    sp->i.child_fitness_vector = create_fitness_vector ();
+    sp->i.result_fitness_vector = create_fitness_vector ();
+
+    ensure_fitness_vector (sp->i.parent_fitness_vector, sp->g.population_size);
+    ensure_fitness_vector (sp->i.child_fitness_vector,  sp->g.population_size);
+    ensure_fitness_vector (sp->i.result_fitness_vector, sp->g.population_size);
+  } else
+    sp->i.parent_fitness_vector = sp->i.child_fitness_vector =
+      sp->i.result_fitness_vector = NULL;
+
+  if (sp->o.full_tracing) {
+    sp->i.history = create_population_history ();
+    ensure_population_history (sp->i.history, sp->g.generations);
+    for (unsigned int i = 0; i < sp->g.generations; i++) {
+      ensure_generation_history (sp->i.history->data + i, sp->g.population_size);
+      for (unsigned int j = 0; j < sp->g.population_size; j++)
+       ensure_individual_history (sp->i.history->data[i].data + j, sp->g.ancestral_sequence->length);
+    }
+  }
+}
+
+void make_profile_if_necessary (simulation_parameters *sp) {
+  // Builds a profile on stdout that will finish the process.
+  if (sp->o.make_profile)
+    printf ("begin-comment\n"
+	    "This profile was automatically generated using the make-profile\n"
+	    "directive. When run, this profile will perform statistical\n"
+	    "analysis on the populations generated by the simulation run.\n"
+	    "The simulation run used random seed %d and had image name\n"
+	    "'%s'.\n"
+	    "end-comment\n\n"
+	    "trials: %d\n"
+	    "population-size: %d\n"
+	    "statistics-only\n"
+	    "end-of-options\n",
+	    sp->i.random_seed, sp->image_name, sp->o.trials, sp->g.population_size);
+}
+
+void run_trials (simulation_parameters *sp) {
   population *parents = create_population ();
   population *children = create_population ();
   population *temporary = NULL;
 
-  ensure_population (parents, sp->population_size);
-  ensure_population (children, sp->population_size);
+  ensure_population (parents, sp->g.population_size);
+  ensure_population (children, sp->g.population_size);
 
-  sp->parent_fitness_vector = create_fitness_vector ();
-  sp->child_fitness_vector = create_fitness_vector ();
-  sp->result_fitness_vector = create_fitness_vector ();
+  allocate_internal_memory (sp);
+  make_profile_if_necessary (sp);
 
-  ensure_fitness_vector (sp->parent_fitness_vector, sp->population_size);
-  ensure_fitness_vector (sp->child_fitness_vector, sp->population_size);
-  ensure_fitness_vector (sp->result_fitness_vector, sp->population_size);
+  seed_rng (sp->i.random_seed);
 
-  if (sp->full_tracing) {
-    sp->history = create_population_history ();
-    ensure_population_history (sp->history, sp->generations);
-    for (unsigned int i = 0; i < sp->generations; i++) {
-      ensure_generation_history (sp->history->data + i, sp->population_size);
-      for (unsigned int j = 0; j < sp->population_size; j++)
-       ensure_individual_history (sp->history->data[i].data + j, sp->ancestral_sequence->length);
-    }
-  }
-
-  seed_rng (sp->random_seed);
-
-  for (unsigned int t = 0; t < sp->number_of_trials; t++) {
+  for (unsigned int t = 0; t < sp->g.trials; t++) {
     print_trial_indicator (t + 1, sp);
 
-    for (unsigned int i = 0; i < sp->population_size; i++)
-      copy_sequence (sp->ancestral_sequence, parents->data + i);
-
-    for (unsigned int generation = 0; generation < sp->generations; generation++) {
-      choose_parents (parents, children, sp, generation);
-
-      // Swap the parents and children out now.
-      temporary = parents;
-      parents = children;
-      children = temporary;
-
-      if (sp->print_each_generation)
-       print_d_values (parents, sp);
+    // We need trial data one way or another. Depending on whether we're
+    // supposed to read in existing data or generate new data, we choose
+    // the function to call.
+    if (sp->o.statistics_only)
+      read_trial (sp, parents, children);
+    else
+      simulate_trial (sp, parents, children);
+    
+    // There are two reasons we might print sequences. The first is if it's a
+    // normal run and we want to verify things in the Excel checker. The second
+    // is if it's a simulation-only run and we want to archive the results for
+    // later analysis. Since the Excel checker accepts sequences only in
+    // nucleotide form, those are output unpacked. However, for archival
+    // purposes we pack the sequences to save on storage space and read/write
+    // time.
+    if (sp->o.print_sequences)
+      print_sequences (parents, sp, false);
+    else if (sp->o.simulation_only) {
+      print_sequences (parents, sp, true);
+      printf ("\n");
     }
 
     // Now select a subset and print out D values.
-    if (sp->print_sequences)
-      print_sequences (parents, sp);
-
-    print_d_values (parents, sp);
+    if (! sp->o.simulation_only)
+      print_d_values (parents, sp);
   }
 
   delete_population (parents);
@@ -2964,7 +3052,9 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
       fscanf (f, "%65535s", s);
     }
 
-    if (s[0] && !
+    int end = ! strcmp (s, "end-of-options");
+
+    if (s[0] && ! end && !
 	(int_directive (f, s, "trials:", &sp->o.trials) ||
 	 int_directive (f, s, "population-size:", &sp->g.population_size) ||
 	 int_directive (f, s, "generations:", &sp->g.generations) ||
@@ -2992,11 +3082,14 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
 	 boolean_directive (f, s, "print-sequences", &sp->o.print_sequences) ||
 	 boolean_directive (f, s, "print-each-generation", &sp->o.print_each_generation) ||
 	 boolean_directive (f, s, "full-tracing", &sp->o.full_tracing) ||
+	 (sp->simulation_only &&
+	  boolean_directive (f, s, "make-profile", &sp->o.make_profile)) ||
 	 sequence_directive (f, s, "ancestral-sequence:", &sp->g.ancestral_sequence) ||
 	 special_directives (f, s, sp))) {
       fprintf (stderr, "Error: Unrecognized directive or invalid value for '%s'\n", s);
       return 1;
-    }
+    } else if (end)
+      return 0;
 
     // Make sure the buffer is empty before the next read. This is to ensure
     // that if an EOF is hit after an empty read, the last word read is not
@@ -3120,7 +3213,7 @@ int main_delegate (int argc, char** argv) {
     return EXIT_FAILURE;
   }
 
-  fprintf (stderr, "Using random seed %d\n", sp.random_seed);
+  fprintf (stderr, "Using random seed %d\n", sp.i.random_seed);
   sp.image_name = argv[1];
 
   // Run the trials.
