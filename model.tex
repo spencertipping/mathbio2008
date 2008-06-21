@@ -548,7 +548,7 @@ inline void *safe_malloc (size_t size) {
 
 unsigned int free_return_true (void *v) {
   free (v);
-  return TRUE;
+  return ! 0;
 }
 \end{ccode}
 
@@ -855,26 +855,6 @@ typedef struct {
 __define_structure_simple__(individual_history, individual_history_node)
 __define_structure_complex__(generation_history, individual_history)
 __define_structure_complex__(population_history, generation_history)
-\end{ccode}
-
-    \subsection{Simulation Parameters}
-      \label{sec:simulation-parameters}
-
-      We provide a stub for the simulation parameters, defined fully in section
-      \ref{sec:full-simulation-parameters}. The simulation parameters provide
-      storage for all of the profile directive settings and things like that.
-
-\begin{ccode}
-#define NEUTRAL_SELECTION 0
-#define PURIFYING_SELECTION 1
-#define DIVERSIFYING_SELECTION 2
-
-#define NEUTRAL_DRIFT 0
-#define SHARP_BOTTLENECK_DRIFT 1
-#define EVEN_SUBDIVISION_DRIFT 2
-
-struct _simulation_parameters;
-typedef struct _simulation_parameters simulation_parameters;
 \end{ccode}
 
     \subsection{Codon Sets}
@@ -1295,6 +1275,247 @@ sequence *read_sequence (const char *input) {
 }
 \end{ccode}
 
+  \section{Simulation Parameters}
+    \label{sec:simulation-parameters}
+    
+    The simulation parameter structure stores the global data for a single
+    program run. The data here corresponds strongly to the profile directives
+    defined in section \ref{sec:profiles}.
+
+    \subsection{Selection and Drift Constants}
+      \label{sec:selection-drift-constants}
+
+      Each model of selection and drift has an associated identification
+      constant. We define those here for easy reference later.
+
+\begin{ccode}
+#define NEUTRAL_SELECTION 0
+#define PURIFYING_SELECTION 1
+#define DIVERSIFYING_SELECTION 2
+
+#define NEUTRAL_DRIFT 0
+#define SHARP_BOTTLENECK_DRIFT 1
+#define EVEN_SUBDIVISION_DRIFT 2
+\end{ccode}
+
+    \subsection{Simulation Parameter Structures}
+      \label{sec:full-simulation-parameters}
+
+      Simulation parameters include the initial population size, the ancestral
+      sequence, HKY-85 parameters, recombination rate, etc. Fitness functions
+      take a population and the index of a sequence and should return a double
+      between 0 and 1 indicating the relative fitness of that sequence.
+
+      By default, we assume the neutral model and add in selective or drift
+      influences. An example of such an influence is purifying selection, where
+      individuals who deviate from a predefined optimum are less fit. The next
+      step is to define the rules for mutation under the neutral model. Mutation
+      is generally simple, as is recombination.
+
+      These structures define various aspects of a running simulation's
+      behavior. We break them down symbolically, although the in-memory
+      representation of the \verb|simulation_parameters| structure will be
+      contiguous since most of the child structures are instantiated in-place
+      and not pointed to.
+
+      \subsubsection{Output parameters}
+	\label{sec:output-parameters}
+
+	These parameters govern the format of the output. They correspond to the
+	directives defined in section \ref{sec:output-directives}.
+
+\begin{ccode}
+typedef struct {
+  unsigned int		trials;
+  bool			print_sequences;
+  bool			make_profile;
+  bool			print_each_generation;
+  bool			full_tracing;
+} output_parameters;
+\end{ccode}
+
+      \subsubsection{Process parameters}
+	\label{sec:process-parameters}
+
+	These parameters govern the processing phase in the general sense. They
+	correspond to the directives defined in section
+	\ref{sec:process-directives}.
+
+\begin{ccode}
+typedef struct {
+  bool			simulation_only;
+  bool			statistics_only;
+} process_parameters;
+\end{ccode}
+
+      \subsubsection{General-purpose biological parameters}
+	\label{sec:general-parameters}
+
+	These parameters govern the general biological operation of the model.
+	They correspond to the directives defined in section
+	\ref{sec:general-directives}.
+
+\begin{ccode}
+typedef struct {
+  double		mutations_per_nucleotide;
+  double		transitions_per_transversion;
+  double		frequency_a;
+  double		frequency_c;
+  double		frequency_g;
+  double		frequency_u;
+} hky85_parameters;
+
+typedef struct {
+  unsigned int		population_size;
+  unsigned int		generations;
+  unsigned int		sample_size;
+  hky85_parameters	mutation;
+  double		recombination_rate;
+  sequence		*ancestral_sequence;
+  unsigned int		selection_model;
+  unsigned int		drift_model;
+} general_parameters;
+\end{ccode}
+
+      \subsubsection{Model-specific parameters}
+	\label{sec:model-parameters}
+
+	These parameters govern model-specific behavior. They correspond to the
+	directives defined in section \ref{sec:model-directives}.
+
+\begin{ccode}
+typedef struct {
+  double		selection_coefficient;
+  sequence		*optimal_sequence;
+} purifying_selection_parameters;
+
+typedef struct {
+  double		selection_coefficient;
+} diversifying_selection_parameters;
+
+typedef struct {
+  unsigned int		start;
+  unsigned int		duration;
+  unsigned int		size;
+} sharp_bottleneck_parameters;
+
+typedef struct {
+  unsigned int		start;
+  unsigned int		duration;
+  unsigned int		size;
+} even_subdivision_parameters;
+
+typedef struct {
+  purifying_selection_parameters	purifying;
+  diversifying_selection_parameters	diversifying;
+  sharp_bottleneck_parameters		bottleneck;
+  even_subdivision_parameters		subdivision;
+} model_parameters;
+\end{ccode}
+
+      \subsubsection{Simulation parameters}
+	\label{sec:simulation-parameter-complete}
+
+	We define the full simulation parameter structure here. The variable
+	names are shortened to facilitate easy access to the fields.
+
+\begin{ccode}
+typedef struct {
+  // These fields are used for internal purposes. We put them here to be
+  // effectively global to the thread being run.
+  fitness_vector	*parent_fitness_vector;
+  fitness_vector	*child_fitness_vector;
+  fitness_vector	*result_fitness_vector;
+  population_history	*history;
+  double		assumed_gl_variance;
+  unsigned int		random_seed;
+} simulation_internal_data;
+
+typedef struct {
+  output_parameters		o;
+  process_parameters		p;
+  general_parameters		g;
+  model_parameters		m;
+  simulation_internal_data	i;
+  char				*image_name;
+} simulation_parameters;
+
+void initialize_simulation_parameters (simulation_parameters *sp) {
+  struct timeval tv;
+  gettimeofday (&tv, NULL);
+
+  sp->i.random_seed                     	= tv.tv_sec ^ ((uint32_t) tv.tv_usec << 11);
+  sp->o.trials                     		= 50;
+  sp->g.population_size				= 500;
+  sp->g.generations				= 1000;
+  sp->g.sample_size				= 20;
+
+  sp->g.selection_model				= NEUTRAL_SELECTION;
+  sp->g.drift_model				= NEUTRAL_DRIFT;
+
+  sp->g.mutation.frequency_a			= 0.25;
+  sp->g.mutation.frequency_c			= 0.25;
+  sp->g.mutation.frequency_g			= 0.25;
+  sp->g.mutation.frequency_u			= 0.25;
+  sp->g.mutation.mutations_per_nucleotide	= 3.4e-5;
+  sp->g.mutation.transitions_per_transversion	= 1.3;
+
+  sp->g.recombination_rate			= 2.5e-5;
+  sp->i.assumed_gl_variance			= 0.0;
+
+  sp->g.ancestral_sequence = read_sequence (
+    "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
+    "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
+  sp->m.purifying.optimal_sequence = read_sequence (
+    "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
+    "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
+
+  sp->m.purifying.selection_coefficient		= 0.1;
+  sp->m.diversifying.selection_coefficient	= 0.1;
+  sp->o.print_sequences				= FALSE;
+  sp->o.print_each_generation			= FALSE;
+  sp->o.full_tracing				= FALSE;
+  sp->o.make_profile				= FALSE;
+
+  sp->m.bottleneck.start			= 200;
+  sp->m.bottleneck.duration			= 500;
+  sp->m.bottleneck.size				= 50;
+
+  sp->m.subdivision.start			= 200;
+  sp->m.subdivision.duration			= 500;
+  sp->m.subdivision.size			= 50;
+}
+
+void delete_simulation_parameters (simulation_parameters *sp) {
+  // We do not free the image name because the memory for this is usually
+  // stack-allocated, not heap-allocated.
+
+  delete_sequence (sp->g.ancestral_sequence);
+  free (sp->g.ancestral_sequence);
+  sp->g.ancestral_sequence = NULL;
+
+  delete_sequence (sp->m.purifying.optimal_sequence);
+  free (sp->m.purifying.optimal_sequence);
+  sp->m.purifying.optimal_sequence = NULL;
+
+  delete_fitness_vector (sp->i.parent_fitness_vector);
+  free (sp->i.parent_fitness_vector);
+  sp->i.parent_fitness_vector = NULL;
+
+  delete_fitness_vector (sp->i.child_fitness_vector);
+  free (sp->i.child_fitness_vector);
+  sp->i.child_fitness_vector = NULL;
+
+  delete_fitness_vector (sp->i.result_fitness_vector);
+  free (sp->i.result_fitness_vector);
+  sp->i.result_fitness_vector = NULL;
+
+  delete_population_history (sp->i.history);
+  free (sp->i.history);
+  sp->i.history = NULL;
+}
+\end{ccode}
+
   \section{Populations}
     \label{sec:populations}
 
@@ -1554,7 +1775,6 @@ void delete_statistics (statistics *s) {
 void compute_variance_coefficients (population *p, simulation_parameters *sp, statistics *result) {
   // Populate the sample size and then compute the variance coefficients.
   result->n 		= p->length;
-  result->pairwise	= result->n * (result->n - 1) / 2;
   result->a1		= 0.0;
   result->a2		= 0.0;
 
@@ -1618,7 +1838,7 @@ void compute_genetic_likelihoods (population *p, simulation_parameters *sp, stat
 
   // Now estimate these likelihoods across sites.
   for (unsigned int i = 0; i < p->data[0].length; i++) {
-    result->gl_site_non[i] = 0.0;
+    result->gl_site_non.data[i] = 0.0;
 
     for (unsigned int j = 0; j < 3; j++)
       // Check for variance at position j.
@@ -1628,7 +1848,7 @@ void compute_genetic_likelihoods (population *p, simulation_parameters *sp, stat
 	double total = 0.0;
 	for (unsigned int k = 0; k < p->length; k++)
 	  total += result->gl_data[j][k];
-	result->gl_site_non[i] += total / (double) p->length;
+	result->gl_site_non.data[i] += total / (double) p->length;
       }
   }
 }
@@ -1772,43 +1992,43 @@ void compute_theta_site (population *p, simulation_parameters *sp, statistics *r
 
     // If the site segregates, then we compute theta for it. Otherwise, we pass
     // it up.
-    result->theta_site_seg->data[codon_site] = (cs_site > 1) ? 1.0 : 0.0;
+    result->theta_site_seg.data[codon_site] = (cs_size > 1) ? 1.0 : 0.0;
 
     if (cs_size == 2 && codon_set_singleton (cs) != -1) {
       // It's a singleton. In this case, it's either synonymous or not.
       if (! codon_set_synonymous (cs))
-	result->theta_site_non->data[i] = 1.0;
+	result->theta_site_non.data[codon_site] = 1.0;
     } else if (cs_size > 1) {
       // Determine which nucleotides segregate.
       codon set_mask = codon_set_mask (cs);
-      for (unsigned int j = 0; j < 3; j++)
-	if (set_mask & (1 << (j * 2))) {
+      for (unsigned int i = 0; i < 3; i++)
+	if (set_mask & (1 << (i * 2))) {
 	  // The condition on this if statement is just a way of determining
 	  // whether we see mutation at a given nucleotide site.
-	  double nc        = sp->i.assumed_gl_variance * (double) result->ng_size[j];
+	  double nc        = sp->i.assumed_gl_variance * (double) result->dng_size[i];
 	  double ng_factor = (sp->i.assumed_gl_variance == 0.0) ?
-			       ((result->ng_size[j] > 0) ? 1.0 : 0.0) :
+			       ((result->dng_size[i] > 0) ? 1.0 : 0.0) :
 			       nc / (1.0 + nc);
 	  double co_factor = 1.0 - ng_factor;
-	  double ng_est    = result->dng_data[j];
+	  double ng_est    = result->dng_data[i];
 	  double co_est    = 0.0;
 	  double non       = ng_factor * ng_est;
 
 	  // Count the occurrence of the multipliton.
-	  result->dng_multiplitons[j]++;
+	  result->dng_multiplitons[i]++;
 
 	  if (co_factor > 0.0) {
 	    // Average out all of the combinatorial numbers for the given
 	    // codons. Weight by the frequency of each, so we actually get the
 	    // values from the population itself.
 	    double total = 0.0;
-	    for (unsigned int k = 0; k < p->length; k++)
-	      total += genetic_code_nonsyn_likelihoods[j][_idx(p->data[k].data[i])];
+	    for (unsigned int j = 0; j < p->length; j++)
+	      total += result->gl_data[i][_idx(p->data[j].data[codon_site])];
 	    co_est = total / (double) p->length;
 	    non += co_factor * co_est;
 	  }
 
-	  result->theta_site_non->data[i] += non;
+	  result->theta_site_non.data[codon_site] += non;
 	}
     }
 
@@ -1821,16 +2041,16 @@ void compute_theta (population *p, simulation_parameters *sp, statistics *result
   
   result->s_syn = result->s_non = 0.0;
 
-  ensure_theta_array (result->theta_site_syn, p->data[0].length);
-  ensure_theta_array (result->theta_site_non, p->data[0].length);
+  ensure_site_statistic (&result->theta_site_seg, p->data[0].length);
+  ensure_site_statistic (&result->theta_site_non, p->data[0].length);
 
   // Now go through the columns and compute theta.
   for (unsigned int i = 0; i < p->data[0].length; i++) {
-    result->theta_site_seg->data[i] = result->theta_site_non->data[i] = 0.0;
-    compute_theta_site (p, sp, result, i, theta_site_set (p, i));
+    result->theta_site_seg.data[i] = result->theta_site_non.data[i] = 0.0;
+    compute_theta_site (p, sp, result, i, codon_site_set (p, i));
     
-    result->s_syn += result->theta_site_seg->data[i] - result->theta_site_non->data[i];
-    result->s_non += result->theta_site_non->data[i];
+    result->s_syn += result->theta_site_seg.data[i] - result->theta_site_non.data[i];
+    result->s_non += result->theta_site_non.data[i];
   }
 
   // Divide by the correctional factor.
@@ -2134,7 +2354,7 @@ void compute_traced_values (population *p, simulation_parameters *sp, statistics
   unsigned int sample_size = p->data[0].length;
 
   for (unsigned int ci = 0; ci < p->data[0].length; ci++)
-    if (codon_set_multipliton (theta_site_set (p, ci))) {
+    if (codon_set_multipliton (codon_site_set (p, ci))) {
       // Test the estimators here. We don't test them on singleton sites at the
       // moment, nor do we test our assumptions about homoplasy by investigating
       // invariant sites.
@@ -2143,12 +2363,12 @@ void compute_traced_values (population *p, simulation_parameters *sp, statistics
       unsigned int	non_mutations   = mutation_counts >> 32;
       unsigned int	total_mutations = mutation_counts & 0xffffffffull;
 
-      traced_site_seg[ci] = (double) total_mutations /
-			    (double) (sample_size * (sample_size - 1) / 2);
+      result->traced_site_seg.data[ci] = (double) total_mutations /
+					 (double) (sample_size * (sample_size - 1) / 2);
 
-      traced_site_non[ci] = (total_mutations > 0) ?
-			      (double) non_mutations / (double) total_mutations :
-			      0.0;
+      result->traced_site_non.data[ci] = (total_mutations > 0) ?
+					   (double) non_mutations / (double) total_mutations :
+					   0.0;
     }
 }
 \end{ccode}
@@ -2176,8 +2396,8 @@ void compute_estimator_accuracy (population *p, simulation_parameters *sp, stati
     double gl_non_error		= result->gl_site_non.data[i] - result->traced_site_non.data[i];
     double theta_seg_error	= result->theta_site_seg.data[i] - result->traced_site_seg.data[i];
     double theta_non_error	= result->theta_site_non.data[i] - result->traced_site_non.data[i];
-    double random_seg_error	= normalized_random () - result->traced_site_seg[i];
-    double random_non_error	= normalized_random () - result->traced_site_non[i];
+    double random_seg_error	= normalized_random () - result->traced_site_seg.data[i];
+    double random_non_error	= normalized_random () - result->traced_site_non.data[i];
 
     result->gl_non_bias		+= gl_non_error;
     result->gl_non_var		+= gl_non_error * gl_non_error;
@@ -2199,223 +2419,7 @@ void compute_estimator_accuracy (population *p, simulation_parameters *sp, stati
 
   \section{Simulation Runtime}
 
-    Simulation parameters (see section \ref{sec:simulation-parameters}) include
-    the initial population size, the ancestral sequence, HKY-85 parameters,
-    recombination rate, etc. Fitness functions take a population and the index
-    of a sequence and should return a double between 0 and 1 indicating the
-    relative fitness of that sequence.
 
-    By default, we assume the neutral model and add in selective or drift
-    influences. An example of such an influence is purifying selection, where
-    individuals who deviate from a predefined optimum are less fit. The next
-    step is to define the rules for mutation under the neutral model. Mutation
-    is generally simple, as is recombination.
-
-    \subsection{Simulation Parameter Structures}
-      \label{sec:full-simulation-parameters}
-
-      These structures define various aspects of a running simulation's
-      behavior. We break them down symbolically, although the in-memory
-      representation of the \verb|simulation_parameters| structure will be
-      contiguous since most of the child structures are instantiated in-place
-      and not pointed to.
-
-      \subsubsection{Output parameters}
-	\label{sec:output-parameters}
-
-	These parameters govern the format of the output. They correspond to the
-	directives defined in section \ref{sec:output-directives}.
-
-\begin{ccode}
-typedef struct {
-  unsigned int		trials;
-  bool			print_sequences;
-  bool			make_profile;
-  bool			print_each_generation;
-  bool			full_tracing;
-} output_parameters;
-\end{ccode}
-
-      \subsubsection{Process parameters}
-	\label{sec:process-parameters}
-
-	These parameters govern the processing phase in the general sense. They
-	correspond to the directives defined in section
-	\ref{sec:process-directives}.
-
-\begin{ccode}
-typedef struct {
-  bool			simulation_only;
-  bool			statistics_only;
-  bool			importing_sequences;
-} process_parameters;
-\end{ccode}
-
-      \subsubsection{General-purpose biological parameters}
-	\label{sec:general-parameters}
-
-	These parameters govern the general biological operation of the model.
-	They correspond to the directives defined in section
-	\ref{sec:general-directives}.
-
-\begin{ccode}
-typedef struct {
-  double		mutations_per_nucleotide;
-  double		transitions_per_transversion;
-  double		frequency_a;
-  double		frequency_c;
-  double		frequency_g;
-  double		frequency_u;
-} hky85_parameters;
-
-typedef struct {
-  unsigned int		population_size;
-  unsigned int		generations;
-  unsigned int		sample_size;
-  hky85_parameters	mutation;
-  double		recombination_rate;
-  sequence		*ancestral_sequence;
-  unsigned int		selection_model
-  unsigned int		drift_model;
-} general_parameters;
-\end{ccode}
-
-      \subsubsection{Model-specific parameters}
-	\label{sec:model-parameters}
-
-	These parameters govern model-specific behavior. They correspond to the
-	directives defined in section \ref{sec:model-directives}.
-
-\begin{ccode}
-typedef struct {
-  double		selection_coefficient;
-  sequence		*optimal_sequence;
-} purifying_selection_parameters;
-
-typedef struct {
-  double		selection_coefficient;
-} diversifying_selection_parameters;
-
-typedef struct {
-  unsigned int		start;
-  unsigned int		duration;
-  unsigned int		size;
-} sharp_bottleneck_parameters;
-
-typedef struct {
-  unsigned int		start;
-  unsigned int		duration;
-  unsigned int		size;
-} even_subdivision_parameters;
-
-typedef struct {
-  purifying_selection_parameters	purifying;
-  diversifying_selection_parameters	diversifying;
-  sharp_bottleneck_parameters		bottleneck;
-  even_subdivision_parameters		subdivision;
-} model_parameters;
-\end{ccode}
-
-      \subsubsection{Simulation parameters}
-	\label{sec:simulation-parameter-complete}
-
-	We define the full simulation parameter structure here. The variable
-	names are shortened to facilitate easy access to the fields.
-
-\begin{ccode}
-typedef struct {
-  // These fields are used for internal purposes. We put them here to be
-  // effectively global to the thread being run.
-  fitness_vector	*parent_fitness_vector;
-  fitness_vector	*child_fitness_vector;
-  fitness_vector	*result_fitness_vector;
-  population_history	*history;
-} simulation_internal_data;
-
-struct _simulation_parameters {
-  output_parameters		o;
-  process_parameters		p;
-  general_parameters		g;
-  model_parameters		m;
-  simulation_internal_data	i;
-  char				*image_name;
-};
-
-void initialize_simulation_parameters (simulation_parameters *sp) {
-  struct timeval tv;
-  gettimeofday (&tv, NULL);
-
-  sp->i.random_seed                     	= tv.tv_sec ^ tv.tv_usec;
-  sp->o.trials                     		= 50;
-  sp->g.population_size				= 500;
-  sp->g.generations				= 1000;
-  sp->g.sample_size				= 20;
-
-  sp->g.selection_model				= NEUTRAL_SELECTION;
-  sp->g.drift_model				= NEUTRAL_DRIFT;
-
-  sp->g.mutation.frequency_a			= 0.25;
-  sp->g.mutation.frequency_c			= 0.25;
-  sp->g.mutation.frequency_g			= 0.25;
-  sp->g.mutation.frequency_u			= 0.25;
-  sp->g.mutation.mutations_per_nucleotide	= 3.4e-5;
-  sp->g.mutation.transitions_per_transversion	= 1.3;
-
-  sp->g.recombination_rate			= 2.5e-5;
-  sp->i.assumed_gl_variance			= 0.0;
-
-  sp->g.ancestral_sequence = read_sequence (
-    "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
-    "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
-  sp->m.purifying.optimal_sequence = read_sequence (
-    "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
-    "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
-
-  sp->m.purifying.selection_coefficient		= 0.1;
-  sp->m.diversifying.selection_coefficient	= 0.1;
-  sp->o.print_sequences				= FALSE;
-  sp->o.print_each_generation			= FALSE;
-  sp->o.full_tracing				= FALSE;
-  sp->o.make_profile				= FALSE;
-
-  sp->m.bottleneck.start			= 200;
-  sp->m.bottleneck.duration			= 500;
-  sp->m.bottleneck.size				= 50;
-
-  sp->m.subdivision.start			= 200;
-  sp->m.subdivision.duration			= 500;
-  sp->m.subdivision.size			= 50;
-}
-
-void delete_simulation_parameters (simulation_parameters *sp) {
-  // We do not free the image name because the memory for this is usually
-  // stack-allocated, not heap-allocated.
-
-  delete_sequence (sp->g.ancestral_sequence);
-  free (sp->g.ancestral_sequence);
-  sp->g.ancestral_sequence = NULL;
-
-  delete_sequence (sp->m.purifying.optimal_sequence);
-  free (sp->m.purifying.optimal_sequence);
-  sp->m.purifying.optimal_sequence = NULL;
-
-  delete_fitness_vector (sp->i.parent_fitness_vector);
-  free (sp->i.parent_fitness_vector);
-  sp->i.parent_fitness_vector = NULL;
-
-  delete_fitness_vector (sp->i.child_fitness_vector);
-  free (sp->i.child_fitness_vector);
-  sp->i.child_fitness_vector = NULL;
-
-  delete_fitness_vector (sp->i.result_fitness_vector);
-  free (sp->i.result_fitness_vector);
-  sp->i.result_fitness_vector = NULL;
-
-  delete_population_history (sp->i.history);
-  free (sp->i.history);
-  sp->i.history = NULL;
-}
-\end{ccode}
     
     \subsection{Mutation}
     
@@ -2429,7 +2433,7 @@ void delete_simulation_parameters (simulation_parameters *sp) {
       then we adjust all future probabilities accordingly.
 
 \begin{ccode}
-inline double nucleotide_probability (nucleotide n1, nucleotide n2, hky85_params *p) {
+inline double nucleotide_probability (nucleotide n1, nucleotide n2, hky85_parameters *p) {
   if (n1 == n2)
     return 0.0;
   else {
@@ -2439,7 +2443,7 @@ inline double nucleotide_probability (nucleotide n1, nucleotide n2, hky85_params
   }
 }
 
-inline nucleotide choose_nucleotide (nucleotide existing, hky85_params *p) {
+inline nucleotide choose_nucleotide (nucleotide existing, hky85_parameters *p) {
   // Returns the nucleotide that is mutated to. It is guaranteed to change.
   double pu        = p->frequency_u * nucleotide_probability (_u, existing, p);
   double pc        = p->frequency_c * nucleotide_probability (_c, existing, p);
@@ -2455,7 +2459,7 @@ inline nucleotide choose_nucleotide (nucleotide existing, hky85_params *p) {
 
 inline void mutate_sequence (sequence *s, simulation_parameters *sp,
 			     unsigned int generation, unsigned int individual) {
-  hky85_params *p = &sp->m.mutation;
+  hky85_parameters *p = &sp->g.mutation;
   double given_probability = pow (1.0 - p->mutations_per_nucleotide, s->length * 3);
 
   while (normalized_random () > given_probability) {
@@ -2620,7 +2624,7 @@ inline void populate_parent_fitness (population *parents, simulation_parameters 
 	current = purifying_selection (parents, i, sp);
 	break;
       default:
-	fprintf (stderr, "Internal error: Selection model %d does not exist.\n", sp->selection_model);
+	fprintf (stderr, "Internal error: Selection model %d does not exist.\n", sp->g.selection_model);
 	exit (EXIT_FAILURE);
     }
 
@@ -2644,7 +2648,7 @@ inline void consider_drift_on_fitness (population *parents, unsigned int generat
 	  current = even_population_subdivision (generation, i, child_index, sp);
 	  break;
         default:
-	  fprintf (stderr, "Internal error: Drift model %d does not exist.\n", sp->drift_model);
+	  fprintf (stderr, "Internal error: Drift model %d does not exist.\n", sp->g.drift_model);
 	  exit (EXIT_FAILURE);
       }
 
@@ -2796,12 +2800,12 @@ inline void choose_parents (population *parents, population *children,
 	\ref{sec:sequence-forms}.
 
 \begin{ccode}
-void print_sequences (population *p, bool packed) {
+void print_sequences (population *p, FILE *f, bool packed) {
   // Prints all of the sequences in a population, optionally in packed form.
 
   for (unsigned int i = 0; i < p->length; i++) {
     printf ("Sequence %d of %d:, ", i + 1, p->length);
-    print_sequence (stdout, p->data + i, packed);
+    print_sequence (p->data + i, f, packed);
     printf ("\n");
   }
 }
@@ -2868,6 +2872,8 @@ void print_trial_indicator (unsigned int current_trial, simulation_parameters *s
 
 \begin{ccode}
 void simulate_trial (simulation_parameters *sp, population *parents, population *children) {
+  population *temporary = NULL;
+
   // Performs the simulation of a single trial.
   for (unsigned int i = 0; i < sp->g.population_size; i++)
     copy_sequence (sp->g.ancestral_sequence, parents->data + i);
@@ -2897,7 +2903,7 @@ void read_trial (simulation_parameters *sp, population *parents, population *chi
 
 void allocate_internal_memory (simulation_parameters *sp) {
   // Handles the allocation of any simulation temporary space.
-  if (! sp->o.statistics_only) {
+  if (! sp->p.statistics_only) {
     sp->i.parent_fitness_vector = create_fitness_vector ();
     sp->i.child_fitness_vector = create_fitness_vector ();
     sp->i.result_fitness_vector = create_fitness_vector ();
@@ -2940,7 +2946,6 @@ void make_profile_if_necessary (simulation_parameters *sp) {
 void run_trials (simulation_parameters *sp) {
   population *parents = create_population ();
   population *children = create_population ();
-  population *temporary = NULL;
 
   ensure_population (parents, sp->g.population_size);
   ensure_population (children, sp->g.population_size);
@@ -2950,13 +2955,13 @@ void run_trials (simulation_parameters *sp) {
 
   seed_rng (sp->i.random_seed);
 
-  for (unsigned int t = 0; t < sp->g.trials; t++) {
+  for (unsigned int t = 0; t < sp->o.trials; t++) {
     print_trial_indicator (t + 1, sp);
 
     // We need trial data one way or another. Depending on whether we're
     // supposed to read in existing data or generate new data, we choose
     // the function to call.
-    if (sp->o.statistics_only)
+    if (sp->p.statistics_only)
       read_trial (sp, parents, children);
     else
       simulate_trial (sp, parents, children);
@@ -2969,14 +2974,14 @@ void run_trials (simulation_parameters *sp) {
     // purposes we pack the sequences to save on storage space and read/write
     // time.
     if (sp->o.print_sequences)
-      print_sequences (parents, sp, false);
-    else if (sp->o.simulation_only) {
-      print_sequences (parents, sp, true);
+      print_sequences (parents, stdout, FALSE);
+    else if (sp->p.simulation_only) {
+      print_sequences (parents, stdout, TRUE);
       printf ("\n");
     }
 
     // Now select a subset and print out D values.
-    if (! sp->o.simulation_only)
+    if (! sp->p.simulation_only)
       print_d_values (parents, sp);
   }
 
@@ -3006,33 +3011,33 @@ void run_trials (simulation_parameters *sp) {
 \begin{ccode}
 unsigned int int_directive (FILE *f, const char *current, const char *key,
 			    unsigned int *value)
-  {return ! strcmp (s, key) && fscanf (f, "%u", value);}
+  {return ! strcmp (current, key) && fscanf (f, "%u", value);}
 
 unsigned int double_directive (FILE *f, const char *current, const char *key,
 			       double *value)
-  {return ! strcmp (s, key) && fscanf (f, "%lf", value);}
+  {return ! strcmp (current, key) && fscanf (f, "%lf", value);}
 
 unsigned int sequence_directive (FILE *f, const char *current, const char *key,
 				 sequence **value)
-  {return ! strcmp (s, key) && fscanf (f, "%65535s", current) &&
+  {return ! strcmp (current, key) && fscanf (f, "%65535s", current) &&
 	  free_return_true (*value) && (*value = read_sequence (current));}
 
 unsigned int boolean_directive (FILE *f, const char *current, const char *key,
 			        bool *value)
-  {return ! strcmp (s, key) && (*value = TRUE);}
+  {return ! strcmp (current, key) && (*value = TRUE);}
 
 unsigned int special_directives (FILE *f, const char *current,
 				 simulation_parameters *sp) {
   // Take care of keyword directives such as selection and drift.
   return ((! strcmp (current, "selection-model:")) && fscanf (f, "%65535s", current) &&
-          ((! strcmp (current, "neutral") && ! (sp->selection_model = NEUTRAL_SELECTION)) ||
-           (! strcmp (current, "purifying") && (sp->selection_model = PURIFYING_SELECTION)) ||
-	   (! strcmp (current, "diversifying") && (sp->selection_model = DIVERSIFYING_SELECTION)))) ||
+          ((! strcmp (current, "neutral") && ! (sp->g.selection_model = NEUTRAL_SELECTION)) ||
+           (! strcmp (current, "purifying") && (sp->g.selection_model = PURIFYING_SELECTION)) ||
+	   (! strcmp (current, "diversifying") && (sp->g.selection_model = DIVERSIFYING_SELECTION)))) ||
 
 	 ((! strcmp (current, "drift-model:")) && fscanf (f, "%65535s", current) &&
-          ((! strcmp (current, "neutral") && ! (sp->drift_model = NEUTRAL_DRIFT)) ||
-           (! strcmp (current, "sharp-bottleneck") && (sp->drift_model = SHARP_BOTTLENECK_DRIFT)) ||
-           (! strcmp (current, "even-subdivision") && (sp->drift_model = EVEN_SUBDIVISION_DRIFT))));
+          ((! strcmp (current, "neutral") && ! (sp->g.drift_model = NEUTRAL_DRIFT)) ||
+           (! strcmp (current, "sharp-bottleneck") && (sp->g.drift_model = SHARP_BOTTLENECK_DRIFT)) ||
+           (! strcmp (current, "even-subdivision") && (sp->g.drift_model = EVEN_SUBDIVISION_DRIFT))));
 }
 
 unsigned int parse_options (simulation_parameters *sp, FILE *f) {
@@ -3074,15 +3079,19 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
 	 int_directive (f, s, "even-subdivision-size:", &sp->m.subdivision.size) ||
 	 (int_directive (f, s, "random-seed:", &sp->i.random_seed) &&
 	  fprintf (stderr, "Warning: Specifying intermal parameter random-seed\n")) ||
-	 (int_directive (f, s, "assumed-gl-variance:", &sp->i.assumed_gl_variance) &&
+	 (double_directive (f, s, "assumed-gl-variance:", &sp->i.assumed_gl_variance) &&
 	  fprintf (stderr, "Warning: Specifying internal parameter assumed-gl-variance\n")) ||
 	 double_directive (f, s, "mutations-per-nucleotide:", &sp->g.mutation.mutations_per_nucleotide) ||
 	 double_directive (f, s, "transitions-per-transversion:", &sp->g.mutation.transitions_per_transversion) || 
-	 double_directive (f, s, "recombination-rate:" &sp->g.recombination_rate) ||
+	 double_directive (f, s, "recombination-rate:", &sp->g.recombination_rate) ||
 	 boolean_directive (f, s, "print-sequences", &sp->o.print_sequences) ||
 	 boolean_directive (f, s, "print-each-generation", &sp->o.print_each_generation) ||
 	 boolean_directive (f, s, "full-tracing", &sp->o.full_tracing) ||
-	 (sp->simulation_only &&
+	 (! sp->p.statistics_only &&
+	  boolean_directive (f, s, "simulation-only", &sp->p.simulation_only)) ||
+	 (! sp->p.simulation_only &&
+	  boolean_directive (f, s, "statistics-only", &sp->p.statistics_only)) ||
+	 (sp->p.simulation_only &&
 	  boolean_directive (f, s, "make-profile", &sp->o.make_profile)) ||
 	 sequence_directive (f, s, "ancestral-sequence:", &sp->g.ancestral_sequence) ||
 	 special_directives (f, s, sp))) {
@@ -3201,7 +3210,7 @@ int main_delegate (int argc, char** argv) {
   simulation_parameters sp;
 
   // Initialize sensible defaults and then parse options.
-  initialize_defaults (&sp);
+  initialize_simulation_parameters (&sp);
 
   if (parse_options (&sp, stdin)) {
     fprintf (stderr, "Error: At least one option was not parsed correctly.\n");
