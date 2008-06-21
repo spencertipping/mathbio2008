@@ -1,0 +1,7 @@
+begin-comment
+A distribution with a large population and complete sample.
+end-comment
+
+trials: 10000
+population-size: 1000
+sample-size: 1000

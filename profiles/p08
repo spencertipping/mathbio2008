@@ -1,0 +1,6 @@
+begin-comment
+A profile with a complete sample instead of a sample size of 20.
+end-comment
+
+trials: 10000
+sample-size: 500

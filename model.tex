@@ -2196,17 +2196,14 @@ void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
 
 	  result->discrete_pi_seg.data[pos] += (double) n_changes;
 	  result->discrete_pi_non.data[pos] += non_factor;
-
-	  result->pi_syn += result->discrete_pi_seg.data[pos] - non_factor;
-	  result->pi_non += non_factor;
 	}
 
     result->discrete_pi_seg.data[pos] *= multiplier;
     result->discrete_pi_non.data[pos] *= multiplier;
-  }
 
-  result->pi_syn *= multiplier;
-  result->pi_non *= multiplier;
+    result->pi_syn += result->discrete_pi_seg.data[pos] - result->discrete_pi_non.data[pos];
+    result->pi_non += result->discrete_pi_non.data[pos];
+  }
 }
 \end{ccode}
 
