@@ -540,6 +540,12 @@ unsigned int free_return_true (void *v) {
         \verb|ensure_x (px, l)|, \verb|*px| will have the appropriate number of
         data elements and its length set.
 
+	\item[Init function]
+	Takes a pointer to a structure and initializes the fields to zero. This
+	should be used only immediately after declaring a stack-allocated
+	structure, since any data already in the structure will be lost but not
+	freed.
+
         \item[Create function]
         Creates an empty structure and returns it. To completely delete the
         structure and its children, use the delete function.
@@ -582,11 +588,16 @@ inline void ensure_##parent_type (parent_type *s, unsigned int length) { \
   } \
 }
 
+#define __init_function__(parent_type, child_type) \
+inline void init_##parent_type (parent_type *s) { \
+  s->length = 0; \
+  s->data = NULL; \
+}
+
 #define __create_function__(parent_type, child_type) \
 inline parent_type *create_##parent_type () { \
   parent_type* result = (parent_type*) safe_malloc (sizeof (parent_type)); \
-  result->length = 0; \
-  result->data = NULL; \
+  init_##parent_type (result); \
   return result; \
 }
 
@@ -612,11 +623,13 @@ inline void delete_##parent_type (parent_type *s) { \
 
 #define __functions_complex__(parent_type, child_type) \
 __ensure_function_complex__(parent_type, child_type) \
+__init_function__(parent_type, child_type) \
 __create_function__(parent_type, child_type) \
 __delete_function_complex__(parent_type, child_type)
 
 #define __functions_simple__(parent_type, child_type) \
 __ensure_function_simple__(parent_type, child_type) \
+__init_function__(parent_type, child_type) \
 __create_function__(parent_type, child_type) \
 __delete_function_simple__(parent_type, child_type)
 
@@ -1148,7 +1161,6 @@ inline sequence *recombine_sequences (sequence *s1, sequence *s2, sequence *dest
 	\end{enumerate}
 
 	An example of a sequence in nucleotide form is \verb|ACA-UCU-GGG-TAG|.
-
 	The other form, {\em packed form}, has these specifications:
 
 	\begin{enumerate}
@@ -1156,12 +1168,13 @@ inline sequence *recombine_sequences (sequence *s1, sequence *s2, sequence *dest
 	  (\verb|!|).
 
 	  \item Each codon is represented as a single character from the string
-	  \verb|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/|,
+	  ``ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'',
 	  such that the codon whose numerical index is $i$ is represented by the
 	  $i$ character in that string.
 
 	  \item A dash is allowed at any point in the sequence. Dashes are
-	  ignored but allowed for readability.
+	  ignored but allowed for readability.\footnote{Though all bets are off
+	  about readability of packed sequences.}
 
 	  \item No whitespace is allowed inside a sequence.
 	\end{enumerate}
@@ -1341,6 +1354,14 @@ inline unsigned int choose_individual (double d, fitness_vector *v, population *
 }
 \end{ccode}
 
+  \section{Statistics}
+    \label{sec:statistics}
+
+    The statistical analysis is the most dynamic part of this model, in the
+    sense that the analyses performed here are under a lot of debate at any
+    given time. Thus they are coded for maximum flexibility, often at some
+    expense to performance.
+
     \subsection{Statistical Structure}
       \label{sec:statistical-structure}
 
@@ -1383,7 +1404,10 @@ typedef struct {
 	to store the results.
 
 \begin{ccode}
-  site_statistic	discrete_pi_estimates;
+  site_statistic	discrete_pi_seg;
+  site_statistic	discrete_pi_non;
+  double		discrete_pi_seg_bias, discrete_pi_seg_var;
+  double		discrete_pi_non_bias, discrete_pi_non_var;
 \end{ccode}
 
       \subsubsection{Continuous pi data}
@@ -1391,23 +1415,6 @@ typedef struct {
 	If we create a continuous pairwise estimator, then we'll need to solve a
 	$64 \times 64$ system of linear equations and store the results here.
 	For now, however, this is not implemented.
-
-      \subsubsection{Parsimonious segregation estimates}
-
-	One aspect of the data that is not explicitly estimated is the
-	segregation of a site. In the case of homoplasy, we might end up with a
-	site that segregates but that segregation is hidden (or the extent of
-	the segregation is not accurately portrayed by the sample). By default,
-	we assume maximum parsimony; thus, if a site shows variance, then it is
-	variant; otherwise, it is assumed to not have been variant. To store
-	this data, we use a $3 \times 64$ matrix of doubles. While
-	floating-point numbers do not reflect the needs of this estimator
-	exactly, we use them for compatibility if we decide later to implement a
-	maximum-likelihood segregation estimator later on.
-
-\begin{ccode}
-  double		pseg_estimates[3][64];
-\end{ccode}
 
       \subsubsection{Parsimonious genetic likelihoods}
 
@@ -1417,7 +1424,8 @@ typedef struct {
 
 \begin{ccode}
   double		gl_data[3][64];
-  site_statistic	gl_estimates;
+  site_statistic	gl_site_non;
+  double		gl_non_bias, gl_non_var;
 \end{ccode}
 
       \subsubsection{Discrete Nei and Gojobori ratios}
@@ -1432,7 +1440,41 @@ typedef struct {
   double		dng_data[3];
   unsigned int		dng_size[3];
   unsigned int		dng_multiplitons[3];
-  site_statistic	dng_estimates;
+\end{ccode}
+
+      \subsubsection{Theta}
+
+	The results for theta are stored sitewise so that we can measure the
+	effectiveness of various computing methods. Right now, we want to see
+	whether minimizing the estimator variance for theta is an improvement
+	over using whole selection.
+
+\begin{ccode}
+  site_statistic	theta_site_seg;
+  site_statistic	theta_site_non;
+  double		theta_site_seg_bias, theta_site_seg_var;
+  double		theta_site_non_bias, theta_site_non_var;
+\end{ccode}
+
+      \subsubsection{Traced values}
+
+	During the simulation process, we trace the actual mutation paths of the
+	individual codon sites if the \verb|full-tracing| option is specified.
+	Then we use backtracing to verify the accuracy of theta.
+
+\begin{ccode}
+  site_statistic	traced_site_seg;
+  site_statistic	traced_site_non;
+\end{ccode}
+
+      \subsubsection{Random estimator error}
+
+	To provide a benchmark for our statistical estimators, we use a random
+	number generator and measure its bias and variance.
+
+\begin{ccode}
+  double		random_seg_bias, random_seg_var;
+  double		random_non_bias, random_non_var;
 \end{ccode}
 
       \subsubsection{Generic initialization methods}
@@ -1444,27 +1486,23 @@ typedef struct {
 } statistics;
 
 void initialize_statistics (statistics *s) {
-  // The most important initialization to perform is that we need to make sure
-  // that the site_syn and site_non pointers refer to valid objects.
-  s->site_syn = create_site_statistic ();
-  s->site_non = create_site_statistic ();
-  s->ng_syn = create_site_statistic   ();
-  s->ng_non = create_site_statistic   ();
-  s->gl_syn = create_site_statistic   ();
-  s->gl_non = create_site_statistic   ();
-  s->rn_syn = create_site_statistic   ();
-  s->rn_non = create_site_statistic   ();
+  init_site_statistic (&s->discrete_pi_seg);
+  init_site_statistic (&s->discrete_pi_non);
+  init_site_statistic (&s->gl_site_non);
+  init_site_statistic (&s->theta_site_seg);
+  init_site_statistic (&s->theta_site_non);
+  init_site_statistic (&s->traced_site_seg);
+  init_site_statistic (&s->traced_site_non);
 }
 
 void delete_statistics (statistics *s) {
-  delete_site_statistic (s->site_syn); free (s->site_syn); s->site_syn = NULL;
-  delete_site_statistic (s->site_non); free (s->site_non); s->site_non = NULL;
-  delete_site_statistic (s->ng_syn);   free (s->ng_syn);	s->ng_syn = NULL;
-  delete_site_statistic (s->ng_non);   free (s->ng_non);	s->ng_non = NULL;
-  delete_site_statistic (s->gl_syn);   free (s->gl_syn);	s->gl_syn = NULL;
-  delete_site_statistic (s->gl_non);   free (s->gl_non);	s->gl_non = NULL;
-  delete_site_statistic (s->rn_syn);   free (s->rn_syn);	s->rn_syn = NULL;
-  delete_site_statistic (s->rn_non);   free (s->rn_non);	s->rn_non = NULL;
+  delete_site_statistic (&s->discrete_pi_seg);
+  delete_site_statistic (&s->discrete_pi_non);
+  delete_site_statistic (&s->gl_site_non);
+  delete_site_statistic (&s->theta_site_seg);
+  delete_site_statistic (&s->theta_site_non);
+  delete_site_statistic (&s->traced_site_seg);
+  delete_site_statistic (&s->traced_site_non);
 }
 \end{ccode}
 
@@ -1513,6 +1551,63 @@ void compute_variance_coefficients (population *p, simulation_parameters *sp, st
 }
 \end{ccode}
 
+    \subsection{Methods for Sitewise Computation}
+      \label{sec:sitewise-computation}
+
+      These methods make it simpler to write sitewise statistical analysis
+      functions.
+
+\begin{ccode}
+inline codon_set codon_site_set (population *p, unsigned int ci) {
+  // Builds and returns the codon set constructed from codon site ci.
+  codon_set result = 0ull;
+  for (unsigned int i = 0; i < p->length; i++)
+    result = codon_set_add (result, _idx(p->data[i].data[ci]));
+  return result;
+}
+
+inline bool codon_set_multipliton (codon_set cs) {
+  // Returns true iff cs contains a multipliton.
+  return (codon_set_singleton (cs) == -1) && (codon_set_count (cs) > 2);
+}
+\end{ccode}
+
+    \subsection{Parsimonious Genetic Likelihood Ratios}
+      \label{sec:genetic-likelihoods}
+
+      We build a table of numbers, each representing the likelihood that a
+      change in nucleotide $i$ of codon $j$ will be nonsynonymous assuming equal
+      nucleotide proportions. We then use this table to estimate the
+      nonsynonymity of the variance at each codon site.
+
+\begin{ccode}
+void compute_genetic_likelihoods (population *p, simulation_parameters *sp, statistics *result) {
+  for (codon c = 0; c < 64; c++)
+    for (unsigned int p = 0; p < 3; p++) {
+      result->gl_data[p][c] = 0.0;
+      for (nucleotide n = 0; n < 4; n++)
+	if (! synonymous (c, inherit_nuc (c, n, p)))
+	  result->gl_data[p][c] += 1.0 / 3.0;
+    }
+
+  // Now estimate these likelihoods across sites.
+  for (unsigned int i = 0; i < p->data[0].length; i++) {
+    result->gl_site_non[i] = 0.0;
+
+    for (unsigned int j = 0; j < 3; j++)
+      // Check for variance at position j.
+      if (codon_set_mask (codon_site_set (p, i)) & (1 << (2 * j))) {
+	// If there's variance, then add up the average of all of the codons in
+	// this column.
+	double total = 0.0;
+	for (unsigned int k = 0; k < p->length; k++)
+	  total += result->gl_data[j][k];
+	result->gl_site_non[i] += total / (double) p->length;
+      }
+  }
+}
+\end{ccode}
+
     \subsection{Nei and Gojobori Ratios}
       \label{sec:nei-gojobori}
 
@@ -1536,8 +1631,8 @@ void compute_variance_coefficients (population *p, simulation_parameters *sp, st
 \begin{ccode}
 void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics *result) {
   for (unsigned int i = 0; i < 3; i++) {
-    result->ng_site[i] = 0.0;
-    result->ng_size[i] = 0;
+    result->dng_data[i] = 0.0;
+    result->dng_size[i] = 0;
   }
 
   // Run through the data building codon sets and searching for singletons.
@@ -1552,9 +1647,9 @@ void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics 
       if (singleton_position != -1) {
         // See the definition of codon_set_singleton if the usage of
         // singleton_position looks peculiar.
-        result->ng_size[singleton_position]++;
+        result->dng_size[singleton_position]++;
         if (! codon_set_synonymous (cs))
-         result->ng_site[singleton_position] += 1.0;
+         result->dng_data[singleton_position] += 1.0;
       }
     }
   }
@@ -1562,8 +1657,8 @@ void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics 
   // Since the site data slots contain the number of nonsynonymous observations,
   // all we need to do is divide by the total number of samples taken.
   for (unsigned int i = 0; i < 3; i++)
-    if (result->ng_size[i] != 0)
-      result->ng_site[i] /= (double) result->ng_size[i];
+    if (result->dng_size[i] != 0)
+      result->dng_data[i] /= (double) result->dng_size[i];
 }
 \end{ccode}
 
@@ -1640,82 +1735,41 @@ void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics 
 	  the first codon and use genetic likelihoods on the first position.
 	\end{enumerate}
 
-	We currently use option 2.
+	We currently use option 2. That's why we have a loop in this code that's
+	very similar to the site-wise computation of genetic likelihood data in
+	section \ref{sec:genetic-likelihoods}.
 
 \begin{ccode}
-inline codon_set theta_site_set (population *p, unsigned int ci) {
-  // Builds and returns the codon set constructed from codon site ci.
-  codon_set result = 0ull;
-  for (unsigned int i = 0; i < p->length; i++)
-    result = codon_set_add (result, _idx(p->data[i].data[ci]));
-  return result;
-}
-
-inline bool codon_set_multipliton (codon_set cs) {
-  // Returns true iff cs contains a multipliton.
-  return (codon_set_singleton (cs) == -1) && (codon_set_count (cs) > 2);
-}
-
-void compute_theta (population *p, simulation_parameters *sp, statistics *result) {
-  // Populates the theta portion of the statistics. Requires that Nei and
-  // Gojobori data already be calculated.
-  result->s_syn = result->s_non = 0.0;
-  ensure_site_statistic (result->site_syn, p->data[0].length);
-  ensure_site_statistic (result->site_non, p->data[0].length);
-
-  if (sp->full_tracing) {
-    ensure_site_statistic (result->ng_syn, p->data[0].length);
-    ensure_site_statistic (result->ng_non, p->data[0].length);
-    ensure_site_statistic (result->gl_syn, p->data[0].length);
-    ensure_site_statistic (result->gl_non, p->data[0].length);
-    ensure_site_statistic (result->rn_syn, p->data[0].length);
-    ensure_site_statistic (result->rn_non, p->data[0].length);
-  }
-
-  for (unsigned int i = 0; i < p->data[0].length; i++)
-    result->site_syn->data[i] = result->site_non->data[i] = 0.0;
-
-  for (unsigned int i = 0; i < 3; i++)
-    result->multis[i] = 0;
-
-  // Now go through the columns and compute theta.
-  for (unsigned int i = 0; i < p->data[0].length; i++) {
-    codon_set cs       	 = theta_site_set (p, i);
+void compute_theta_site (population *p, simulation_parameters *sp, statistics *result,
+			 unsigned int codon_site, codon_set cs) {
     unsigned int cs_size = codon_set_count (cs);
-
-    if (sp->full_tracing) {
-      result->ng_non->data[i]   = 0.0;
-      result->ng_syn->data[i]   = 0.0;
-      result->gl_non->data[i]   = 0.0;
-      result->gl_syn->data[i]   = 0.0;
-      result->rn_non->data[i]   = 0.0;
-      result->rn_syn->data[i]   = 0.0;
-    }
 
     // If the site segregates, then we compute theta for it. Otherwise, we pass
     // it up.
+    result->theta_site_seg->data[codon_site] = (cs_site > 1) ? 1.0 : 0.0;
+
     if (cs_size == 2 && codon_set_singleton (cs) != -1) {
       // It's a singleton. In this case, it's either synonymous or not.
-      if (codon_set_synonymous (cs))
-	result->site_syn->data[i] = 1.0;
-      else
-	result->site_non->data[i] = 1.0;
+      if (! codon_set_synonymous (cs))
+	result->theta_site_non->data[i] = 1.0;
     } else if (cs_size > 1) {
       // Determine which nucleotides segregate.
       codon set_mask = codon_set_mask (cs);
       for (unsigned int j = 0; j < 3; j++)
 	if (set_mask & (1 << (j * 2))) {
+	  // The condition on this if statement is just a way of determining
+	  // whether we see mutation at a given nucleotide site.
 	  double nc        = sp->assumed_gl_variance * (double) result->ng_size[j];
 	  double ng_factor = (sp->assumed_gl_variance == 0.0) ?
-			     ((result->ng_size[j] > 0) ? 1.0 : 0.0) :
-			     nc / (1.0 + nc);
+			       ((result->ng_size[j] > 0) ? 1.0 : 0.0) :
+			       nc / (1.0 + nc);
 	  double co_factor = 1.0 - ng_factor;
-	  double ng_est    = result->ng_site[j];
+	  double ng_est    = result->dng_data[j];
 	  double co_est    = 0.0;
 	  double non       = ng_factor * ng_est;
 
 	  // Count the occurrence of the multipliton.
-	  result->multis[j]++;
+	  result->dng_multiplitons[j]++;
 
 	  if (co_factor > 0.0) {
 	    // Average out all of the combinatorial numbers for the given
@@ -1728,22 +1782,29 @@ void compute_theta (population *p, simulation_parameters *sp, statistics *result
 	    non += co_factor * co_est;
 	  }
 
-	  result->site_syn->data[i] += 1.0 - non;
-	  result->site_non->data[i] += non;
-
-	  if (sp->full_tracing) {
-	    result->ng_non->data[i]  += ng_est;
-	    result->ng_syn->data[i]  += 1.0 - ng_est;
-	    result->gl_non->data[i]  += co_est;
-	    result->gl_syn->data[i]  += 1.0 - co_est;
-	    result->rn_non->data[i]  += normalized_random ();
-	    result->rn_syn->data[i]  += 1.0 - result->rn_non->data[i];
-	  }
+	  result->theta_site_non->data[i] += non;
 	}
     }
+
+}
+
+void compute_theta (population *p, simulation_parameters *sp, statistics *result) {
+  // Populates the theta portion of the statistics.
+  compute_genetic_likelihoods (p, sp, result);
+  compute_nei_gojobori (p, sp, result);
+  
+  result->s_syn = result->s_non = 0.0;
+
+  ensure_theta_array (result->theta_site_syn, p->data[0].length);
+  ensure_theta_array (result->theta_site_non, p->data[0].length);
+
+  // Now go through the columns and compute theta.
+  for (unsigned int i = 0; i < p->data[0].length; i++) {
+    result->theta_site_seg->data[i] = result->theta_site_non->data[i] = 0.0;
+    compute_theta_site (p, sp, result, i, theta_site_set (p, i));
     
-    result->s_syn += result->site_syn->data[i];
-    result->s_non += result->site_non->data[i];
+    result->s_syn += result->theta_site_seg->data[i] - result->theta_site_non->data[i];
+    result->s_non += result->theta_site_non->data[i];
   }
 
   // Divide by the correctional factor.
@@ -1781,6 +1842,7 @@ inline double discrete_pathways_nonsynonymity (codon c1, codon c2, simulation_pa
     // weren't any changes, so there must be three. (Actually, everything
     // works for zero changes as well, but it's a slow way to come up with
     // zero changes.)
+
     codon i11 = inherit (c1, c2, 0), i12 = inherit (i11, c2, 1);
     codon i21 = inherit (c1, c2, 0), i22 = inherit (i21, c2, 2);
     codon i31 = inherit (c1, c2, 1), i32 = inherit (i31, c2, 0);
@@ -1790,19 +1852,21 @@ inline double discrete_pathways_nonsynonymity (codon c1, codon c2, simulation_pa
 
     return (non_path_3 (c1, i11, i12, c2) + non_path_3 (c1, i21, i22, c2) +
 	    non_path_3 (c1, i31, i32, c2) + non_path_3 (c1, i41, i42, c2) +
-	    non_path_3 (c1, i51, i52, c2) + non_path_3 (c1, i61, i62, c2)) / 18.0;
+	    non_path_3 (c1, i51, i52, c2) + non_path_3 (c1, i61, i62, c2)) / 6.0;
   } else if (nc == 1)
     // One change.
     return non_path_1 (c1, c2);
   else {
     // Two changes. In a way, this is the most tricky since we have to
     // specifically exclude the configuration that doesn't change anything.
+
     codon i1 = inherit (c1, c2, 0);
     codon i2 = inherit (c1, c2, 1);
     codon i3 = inherit (c1, c2, 2);
+
     return (((i1 != c1) ? non_path_2 (c1, i1, c2) : 0.0) +
 	    ((i2 != c1) ? non_path_2 (c1, i2, c2) : 0.0) +
-	    ((i3 != c1) ? non_path_2 (c1, i3, c2) : 0.0)) / 4.0;
+	    ((i3 != c1) ? non_path_2 (c1, i3, c2) : 0.0)) / 2.0;
   }
 }
 \end{ccode}
@@ -1818,15 +1882,17 @@ inline double discrete_pathways_nonsynonymity (codon c1, codon c2, simulation_pa
 \begin{ccode}
 void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
   // Fills in the pi computations of the statistical structure.
-  double multiplier = 1.0 / (double) result->pairwise;
+  double multiplier = 1.0 / (double) (p->length * (p->length - 1) / 2);
   result->pi_syn = result->pi_non = 0.0;
 
   // Go through each site looking for codon differences. When we find them, then
-  // we use discrete pathways. The loop indices are optimized to maximize cache
-  // hits, since sequential data is often loaded into cache very readily.
-  for (unsigned int s1 = 0; s1 < p->length - 1; s1++)
-    for (unsigned int s2 = s1 + 1; s2 < p->length; s2++)
-      for (unsigned int pos = 0; pos < p->data[0].length; pos++)
+  // we use discrete pathways.
+  for (unsigned int pos = 0; pos < p->data[0].length; pos++) {
+    result->discrete_pi_seg.data[pos] =
+      result->discrete_pi_non.data[pos] = 0.0;
+
+    for (unsigned int s1 = 0; s1 < p->length - 1; s1++)
+      for (unsigned int s2 = s1 + 1; s2 < p->length; s2++)
 	if (p->data[s1].data[pos] != p->data[s2].data[pos]) {
 	  // Count the difference.
 	  unsigned int	n_changes  = changes (p->data[s1].data[pos], p->data[s2].data[pos]);
@@ -1835,9 +1901,16 @@ void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
 
 	  if (n_changes == 0) n_changes = 3;
 
-	  result->pi_syn += (1.0 - non_factor) * (double) n_changes;
-	  result->pi_non += non_factor * (double) n_changes;
+	  result->discrete_pi_seg.data[pos] += (double) n_changes;
+	  result->discrete_pi_non.data[pos] += non_factor;
+
+	  result->pi_syn += result->discrete_pi_seg.data[pos] - non_factor;
+	  result->pi_non += non_factor;
 	}
+
+    result->discrete_pi_seg.data[pos] *= multiplier;
+    result->discrete_pi_non.data[pos] *= multiplier;
+  }
 
   result->pi_syn *= multiplier;
   result->pi_non *= multiplier;
@@ -2027,14 +2100,12 @@ uint64_t count_mutations (population *p, simulation_parameters *sp, bool by_stat
   return ((uint64_t) non_mutations << 32) | total_mutations;
 }
 
-void compute_tracked_changes (population *p, simulation_parameters *sp, statistics *result) {
+void compute_traced_values (population *p, simulation_parameters *sp, statistics *result) {
   // Here we go across codon sites and compare the actual traced nonsynonymity
   // of multiplitons with the estimates made by Nei and Gojobori, genetic
   // likelihoods, and random numbers.
-  result->ng_bias = result->ng_var = 0.0;
-  result->gl_bias = result->gl_var = 0.0;
-  result->rn_bias = result->rn_var = 0.0;
-  result->multiplitons = 0;
+
+  unsigned int sample_size = p->data[0].length;
 
   for (unsigned int ci = 0; ci < p->data[0].length; ci++)
     if (codon_set_multipliton (theta_site_set (p, ci))) {
@@ -2046,32 +2117,56 @@ void compute_tracked_changes (population *p, simulation_parameters *sp, statisti
       unsigned int	non_mutations   = mutation_counts >> 32;
       unsigned int	total_mutations = mutation_counts & 0xffffffffull;
 
-      if (total_mutations != 0) {
-        double actual_non = (double) non_mutations /
-			    (double) total_mutations;
-        double ng_error = result->ng_non->data[ci] - actual_non;
-        double gl_error = result->gl_non->data[ci] - actual_non;
-        double rn_error = result->rn_non->data[ci] - actual_non;
-        result->ng_bias += ng_error;
-        result->gl_bias += gl_error;
-        result->rn_bias += rn_error;
-        result->ng_var += ng_error * ng_error;
-        result->gl_var += gl_error * gl_error;
-        result->rn_var += rn_error * rn_error;
+      traced_site_seg[ci] = (double) total_mutations /
+			    (double) (sample_size * (sample_size - 1) / 2);
 
-        result->multiplitons++;
-      }
+      traced_site_non[ci] = (total_mutations > 0) ?
+			      (double) non_mutations / (double) total_mutations :
+			      0.0;
     }
+}
+\end{ccode}
 
-  if (result->multiplitons > 1) {
-    // Variance is computed by dividing by n-1.
-    double variance_division_factor = 1.0 / ((double) result->multiplitons - 1.0);
-    result->ng_bias /= (double) result->multiplitons;
-    result->gl_bias /= (double) result->multiplitons;
-    result->rn_bias /= (double) result->multiplitons;
-    result->ng_var *= variance_division_factor;
-    result->gl_var *= variance_division_factor;
-    result->rn_var *= variance_division_factor;
+    \subsection{Statistical Verification}
+      \label{sec:statistical-verification}
+
+      We compute the bias and variance of each of the estimators used in
+      calculating statistics. Since this is computationally expensive (that is
+      to say, computing the traced values in section \ref{sec:full-tracing} is
+      computationally expensive), we enable it only when \verb|full-tracing| has
+      been specified.
+
+\begin{ccode}
+void compute_estimator_accuracy (population *p, simulation_parameters *sp, statistics *result) {
+  compute_traced_values (p, sp, result);
+
+  result->gl_non_bias		= result->gl_non_var		= 0.0;
+  result->theta_site_seg_bias	= result->theta_site_seg_var	= 0.0;
+  result->theta_site_non_bias	= result->theta_site_non_var	= 0.0;
+  result->random_seg_bias	= result->random_seg_var	= 0.0;
+  result->random_non_bias	= result->random_non_var	= 0.0;
+
+  for (unsigned int i = 0; i < result->traced_site_seg.length; i++) {
+    double gl_non_error		= result->gl_site_non.data[i] - result->traced_site_non.data[i];
+    double theta_seg_error	= result->theta_site_seg.data[i] - result->traced_site_seg.data[i];
+    double theta_non_error	= result->theta_site_non.data[i] - result->traced_site_non.data[i];
+    double random_seg_error	= normalized_random () - result->traced_site_seg[i];
+    double random_non_error	= normalized_random () - result->traced_site_non[i];
+
+    result->gl_non_bias		+= gl_non_error;
+    result->gl_non_var		+= gl_non_error * gl_non_error;
+
+    result->theta_site_seg_bias += theta_seg_error;
+    result->theta_site_seg_var	+= theta_seg_error * theta_seg_error;
+
+    result->theta_site_non_bias	+= theta_non_error;
+    result->theta_site_non_var	+= theta_non_error * theta_non_error;
+
+    result->random_seg_bias	+= random_seg_error;
+    result->random_seg_var	+= random_seg_error * random_seg_error;
+
+    result->random_non_bias	+= random_non_error;
+    result->random_non_var	+= random_non_error * random_non_error;
   }
 }
 \end{ccode}
@@ -2223,44 +2318,45 @@ void initialize_simulation_parameters (simulation_parameters *sp) {
   struct timeval tv;
   gettimeofday (&tv, NULL);
 
-  sp->random_seed                          = tv.tv_sec ^ tv.tv_usec;
-  sp->number_of_trials                     = 50;
-  sp->population_size                      = 500;
-  sp->generations                          = 1000;
-  sp->sample_size                          = 20;
+  sp->i.random_seed                          = tv.tv_sec ^ tv.tv_usec;
+  sp->o.trials                     = 50;
+  sp->g.population_size                      = 500;
+  sp->g.generations                          = 1000;
+  sp->g.sample_size                          = 20;
 
-  sp->selection_model                      = NEUTRAL_SELECTION;
-  sp->drift_model                          = NEUTRAL_DRIFT;
+  sp->g.selection_model                      = NEUTRAL_SELECTION;
+  sp->g.drift_model                          = NEUTRAL_DRIFT;
 
-  sp->mutation_parameters.frequency_a      = 0.25;
-  sp->mutation_parameters.frequency_c      = 0.25;
-  sp->mutation_parameters.frequency_g      = 0.25;
-  sp->mutation_parameters.frequency_u      = 0.25;
-  sp->mutation_parameters.mutations_per_nucleotide = 3.4e-5;
-  sp->mutation_parameters.transitions_per_transversion = 1.3;
+  sp->g.mutation.frequency_a      = 0.25;
+  sp->g.mutation.frequency_c      = 0.25;
+  sp->g.mutation.frequency_g      = 0.25;
+  sp->g.mutation.frequency_u      = 0.25;
+  sp->g.mutation.mutations_per_nucleotide = 3.4e-5;
+  sp->g.mutation.transitions_per_transversion = 1.3;
 
-  sp->recombination_rate                   = 2.5e-5;
-  sp->assumed_gl_variance                  = 0.0;
+  sp->g.recombination_rate                   = 2.5e-5;
+  sp->i.assumed_gl_variance                  = 0.0;
 
-  sp->ancestral_sequence = read_sequence (
+  sp->g.ancestral_sequence = read_sequence (
     "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
     "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
-  sp->purifying_optimal_sequence = read_sequence (
+  sp->m.purifying.optimal_sequence = read_sequence (
     "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
     "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
 
-  sp->purifying_selection_coefficient      = 0.1;
-  sp->print_sequences                      = FALSE;
-  sp->print_each_generation                = FALSE;
-  sp->full_tracing                         = FALSE;
+  sp->m.purifying.selection_coefficient      = 0.1;
+  sp->m.diversifying.selection_coefficient = 0.1;
+  sp->o.print_sequences                      = FALSE;
+  sp->o.print_each_generation                = FALSE;
+  sp->o.full_tracing                         = FALSE;
 
-  sp->sharp_bottleneck_start               = 200;
-  sp->sharp_bottleneck_duration            = 500;
-  sp->sharp_bottleneck_size                = 50;
+  sp->m.bottleneck.start               = 200;
+  sp->m.bottleneck.duration            = 500;
+  sp->m.bottleneck.size                = 50;
 
-  sp->even_subdivision_start               = 200;
-  sp->even_subdivision_duration            = 500;
-  sp->even_subdivision_size                = 50;
+  sp->m.subdivision.start               = 200;
+  sp->m.subdivision.duration            = 500;
+  sp->m.subdivision.size                = 50;
 }
 
 
@@ -2625,7 +2721,7 @@ inline void perform_inheritance (population *parents, population *children,
 }
 
 inline void choose_parents (population *parents, population *children,
-                      simulation_parameters *sp, unsigned int generation) {
+			    simulation_parameters *sp, unsigned int generation) {
   // Run through the population and recombine where necessary, performing simple
   // redirection where possible. There may be places where time could be saved
   // by pointer shuffling rather than data copies, but I'm not seeing them yet.
@@ -2647,6 +2743,7 @@ inline void choose_parents (population *parents, population *children,
   for (unsigned int i = 0; i < children->length; i++) {
     consider_drift_on_fitness (parents, generation, i, sp);
     perform_inheritance (parents, children, i, generation, resulting_vector, sp);
+
     // Now mutate the child sequence.
     mutate_sequence (children->data + i, sp, generation, i);
   }
@@ -2694,15 +2791,30 @@ void print_d_values (population *p, simulation_parameters *sp) {
   statistics s;
   initialize_statistics 	(&s);
   compute_variance_coefficients (p, sp, &s);
-  compute_nei_gojobori   	(p, sp, &s);
   compute_theta          	(p, sp, &s);
   compute_pi             	(p, sp, &s);
   compute_d              	(p, sp, &s);
 
-  if (sp->full_tracing)
-    compute_tracked_changes 	(p, sp, &s);
+  // Print a reasonable set of statistics.
+  printf ("%f, %f, %f, %f, %f, %f, %f, %f, %d, %d, %d, %f, %f, %f, %d, %d, %d",
+	  s.d_syn, s.d_non, s.pi_syn, s.pi_non, s.theta_syn, s.theta_non,
+	  s.s_syn, s.s_non, s.dng_size[0], s.dng_size[1], s.dng_size[2],
+	  s.dng_data[0], s.dng_data[1], s.dng_data[2],
+	  s.dng_multiplitons[0], s.dng_multiplitons[1], s.dng_multiplitons[2]);
 
-  // TODO: Print D values...
+  if (sp->full_tracing) {
+    compute_estimator_accuracy 	(p, sp, &s);
+
+    // Print out additional data about the accuracy of each estimator used.
+    printf (", %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f",
+	    s.gl_non_bias, s.gl_non_var,
+	    s.theta_site_seg_bias, s.theta_site_seg_var,
+	    s.theta_site_non_bias, s.theta_site_non_var,
+	    s.random_seg_bias, s.random_seg_var,
+	    s.random_non_bias, s.random_non_var);
+  }
+
+  printf ("\n");
 
   delete_statistics (&s);
   p->length = old_length;
@@ -2710,7 +2822,7 @@ void print_d_values (population *p, simulation_parameters *sp) {
 
 void print_trial_indicator (unsigned int current_trial, simulation_parameters *sp) {
   fprintf (stderr, "Image %s: Trial %d of %d\n",
-         sp->image_name, current_trial, sp->number_of_trials);
+	   sp->i.image_name, current_trial, sp->o.trials);
 }
 \end{ccode}
 
@@ -2817,9 +2929,22 @@ unsigned int sequence_directive (FILE *f, const char *current, const char *key,
   {return ! strcmp (s, key) && fscanf (f, "%65535s", current) &&
 	  free_return_true (*value) && (*value = read_sequence (current));}
 
+unsigned int boolean_directive (FILE *f, const char *current, const char *key,
+			        bool *value)
+  {return ! strcmp (s, key) && (*value = TRUE);}
+
 unsigned int special_directives (FILE *f, const char *current,
 				 simulation_parameters *sp) {
   // Take care of keyword directives such as selection and drift.
+  return ((! strcmp (current, "selection-model:")) && fscanf (f, "%65535s", current) &&
+          ((! strcmp (current, "neutral") && ! (sp->selection_model = NEUTRAL_SELECTION)) ||
+           (! strcmp (current, "purifying") && (sp->selection_model = PURIFYING_SELECTION)) ||
+	   (! strcmp (current, "diversifying") && (sp->selection_model = DIVERSIFYING_SELECTION)))) ||
+
+	 ((! strcmp (current, "drift-model:")) && fscanf (f, "%65535s", current) &&
+          ((! strcmp (current, "neutral") && ! (sp->drift_model = NEUTRAL_DRIFT)) ||
+           (! strcmp (current, "sharp-bottleneck") && (sp->drift_model = SHARP_BOTTLENECK_DRIFT)) ||
+           (! strcmp (current, "even-subdivision") && (sp->drift_model = EVEN_SUBDIVISION_DRIFT))));
 }
 
 unsigned int parse_options (simulation_parameters *sp, FILE *f) {
@@ -2839,87 +2964,36 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
       fscanf (f, "%65535s", s);
     }
 
-    if (strlen (s) && !
+    if (s[0] && !
 	(int_directive (f, s, "trials:", &sp->o.trials) ||
 	 int_directive (f, s, "population-size:", &sp->g.population_size) ||
-	 int_directive (f, s, "generations:", &sp->g.generations)
-	(((! strcmp (s,  "trials:")) && fscanf (f, "%u", &sp->number_of_trials)) ||
-	 ((! strcmp (s,  "population-size:")) && fscanf (f, "%u", &sp->population_size)) ||
-	 ((! strcmp (s,  "generations:")) && fscanf (f, "%u", &sp->generations)) ||
-	 ((! strcmp (s,  "sample-size:")) && fscanf (f, "%u", &sp->sample_size)) ||
-	 ((! strcmp (s,  "frequency-a:")) && fscanf (f, "%lf", &sp->mutation_parameters.frequency_a)) ||
-	 ((! strcmp (s,  "frequency-c:")) && fscanf (f, "%lf", &sp->mutation_parameters.frequency_c)) ||
-	 ((! strcmp (s,  "frequency-g:")) && fscanf (f, "%lf", &sp->mutation_parameters.frequency_g)) ||
-	 ((! strcmp (s,  "frequency-u:")) && fscanf (f, "%lf", &sp->mutation_parameters.frequency_u)) ||
-
-	 ((! strcmp (s, "sharp-bottleneck-start:")) &&
-	  fscanf (f, "%u", &sp->sharp_bottleneck_start)) ||
-
-	 ((! strcmp (s, "sharp-bottleneck-duration:")) &&
-	  fscanf (f, "%u", &sp->sharp_bottleneck_duration)) ||
-
-	 ((! strcmp (s, "sharp-bottleneck-size:")) &&
-	  fscanf (f, "%u", &sp->sharp_bottleneck_size)) ||
-
-	 ((! strcmp (s, "even-subdivision-start:")) &&
-	  fscanf (f, "%u", &sp->even_subdivision_start)) ||
-
-	 ((! strcmp (s, "even-subdivision-duration:")) &&
-	  fscanf (f, "%u", &sp->even_subdivision_duration)) ||
-
-	 ((! strcmp (s, "even-subdivision-size:")) &&
-	  fscanf (f, "%u", &sp->even_subdivision_size)) ||
-
-	 ((! strcmp (s, "random-seed:")) &&
-	  fscanf (f, "%u", &sp->random_seed) &&
-	  fprintf (stderr, "Warning: Specifying internal parameter random-seed, which may "
-			   "cause deviation from biological realism.\n")) ||
-
-	 ((! strcmp (s, "assumed-gl-variance:")) &&
-	  fscanf (f, "%lf", &sp->assumed_gl_variance) &&
-	  fprintf (stderr, "Warning: Specifying internal parameter assumed-gl-variance, "
-			   "which may cause deviation from biological realism.\n")) ||
-
-	 ((! strcmp (s, "mutations-per-nucleotide:")) &&
-	  fscanf (f, "%lf", &sp->mutation_parameters.mutations_per_nucleotide)) ||
-
-	 ((! strcmp (s, "transitions-per-transversion:")) &&
-	  fscanf (f, "%lf", &sp->mutation_parameters.transitions_per_transversion)) ||
-
-	 ((! strcmp (s, "recombination-rate:")) &&
-	  fscanf (f, "%lf", &sp->recombination_rate)) ||
-
-	 ((! strcmp (s, "purifying-selection-coefficient:")) &&
-	  fscanf (f, "%lf", &sp->purifying_selection_coefficient)) ||
-
-	 ((! strcmp (s, "print-sequences")) &&
-	  (sp->print_sequences = TRUE)) ||
-
-	 ((! strcmp (s, "print-each-generation")) &&
-	  (sp->print_each_generation = TRUE)) ||
-
-	 ((! strcmp (s, "full-tracing")) &&
-	  (sp->full_tracing = TRUE)) ||
-
-	 ((! strcmp (s, "ancestral-sequence:")) &&
-	  free_return_true (sp->ancestral_sequence) &&
-	  fscanf (f, "%65535s;", s) &&
-          (sp->ancestral_sequence = read_sequence (s))) ||
-
-	 ((! strcmp (s, "purifying-optimal-sequence:")) &&
-	  free_return_true (sp->purifying_optimal_sequence) &&
-	  fscanf (f, "%65535s;", s) &&
-	  (sp->purifying_optimal_sequence = read_sequence (s))) ||
-
-	 ((! strcmp (s, "selection-model:")) && fscanf (f, "%65535s", s) &&
-          ((! strcmp (s, "neutral") && ! (sp->selection_model = NEUTRAL_SELECTION)) ||
-           (! strcmp (s, "purifying") && (sp->selection_model = PURIFYING_SELECTION)) ||
-	   (! strcmp (s, "diversifying") && (sp->selection_model = DIVERSIFYING_SELECTION)))) ||
-
-	 ((! strcmp (s, "drift-model:")) && fscanf (f, "%65535s", s) &&
-          ((! strcmp (s, "neutral") && ! (sp->drift_model = NEUTRAL_DRIFT)) ||
-          ((! strcmp (s, "sharp-bottleneck") && (sp->drift_model = SHARP_BOTTLENECK_DRIFT)) ||
-          ((! strcmp (s, "even-subdivision") && (sp->drift_model = EVEN_SUBDIVISION_DRIFT)))))))) {
+	 int_directive (f, s, "generations:", &sp->g.generations) ||
+	 int_directive (f, s, "sample-size:", &sp->g.sample_size) ||
+	 double_directive (f, s, "frequency-a:", &sp->g.mutation.frequency_a) ||
+	 double_directive (f, s, "frequency-c:", &sp->g.mutation.frequency_c) ||
+	 double_directive (f, s, "frequency-g:", &sp->g.mutation.frequency_g) ||
+	 double_directive (f, s, "frequency-u:", &sp->g.mutation.frequency_u) ||
+	 double_directive (f, s, "purifying-selection-coefficient:", &sp->m.purifying.selection_coefficient) ||
+	 sequence_directive (f, s, "purifying-optimal-sequence:", &sp->m.purifying.optimal_sequence) ||
+	 double_directive (f, s, "diversifying-selection-coefficient:", &sp->m.diversifying.selection_coefficient) ||
+	 int_directive (f, s, "sharp-bottleneck-start:", &sp->m.bottleneck.start) ||
+	 int_directive (f, s, "sharp-bottleneck-duration:", &sp->m.bottleneck.duration) ||
+	 int_directive (f, s, "sharp-bottleneck-size:", &sp->m.bottleneck.size) ||
+	 int_directive (f, s, "even-subdivision-start:", &sp->m.subdivision.start) ||
+	 int_directive (f, s, "even-subdivision-duration:", &sp->m.subdivision.duration) ||
+	 int_directive (f, s, "even-subdivision-size:", &sp->m.subdivision.size) ||
+	 (int_directive (f, s, "random-seed:", &sp->i.random_seed) &&
+	  fprintf (stderr, "Warning: Specifying intermal parameter random-seed\n")) ||
+	 (int_directive (f, s, "assumed-gl-variance:", &sp->i.assumed_gl_variance) &&
+	  fprintf (stderr, "Warning: Specifying internal parameter assumed-gl-variance\n")) ||
+	 double_directive (f, s, "mutations-per-nucleotide:", &sp->g.mutation.mutations_per_nucleotide) ||
+	 double_directive (f, s, "transitions-per-transversion:", &sp->g.mutation.transitions_per_transversion) || 
+	 double_directive (f, s, "recombination-rate:" &sp->g.recombination_rate) ||
+	 boolean_directive (f, s, "print-sequences", &sp->o.print_sequences) ||
+	 boolean_directive (f, s, "print-each-generation", &sp->o.print_each_generation) ||
+	 boolean_directive (f, s, "full-tracing", &sp->o.full_tracing) ||
+	 sequence_directive (f, s, "ancestral-sequence:", &sp->g.ancestral_sequence) ||
+	 special_directives (f, s, sp))) {
       fprintf (stderr, "Error: Unrecognized directive or invalid value for '%s'\n", s);
       return 1;
     }
@@ -2934,63 +3008,66 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
 }
 \end{ccode}
 
-     To prevent common errors, we provide a sanity check of the profile data.
-     This involves making sure that all relevant sequences are the same length,
-     that no quantitative parameters are out of bounds, etc.
+      \subsubsection{Profile sanity check}
+	\label{sec:profile-sanity-check}
+
+	To prevent common errors, we provide a sanity check of the profile
+	data.  This involves making sure that all relevant sequences are the
+	same length, that no quantitative parameters are out of bounds, etc.
 
 \begin{ccode}
 unsigned int sanity_check (simulation_parameters *sp) {
   // Sequence lengths. Make sure that the purifying optimal sequence and the
   // ancestral sequence have the same length.
-  if (sp->ancestral_sequence->length != sp->purifying_optimal_sequence->length &&
-      sp->selection_model == PURIFYING_SELECTION) {
+  if (sp->g.ancestral_sequence->length != sp->m.purifying.optimal_sequence->length &&
+      sp->g.selection_model == PURIFYING_SELECTION) {
     fprintf (stderr, "Error: Ancestral sequence and optimal sequence are of "
-                 "different lengths.\n");
+		     "different lengths.\n");
     return 1;
   }
 
   // Check to make sure that the statistical sample size is no larger than the
   // population size.
-  if (sp->sample_size > sp->population_size) {
+  if (sp->g.sample_size > sp->g.population_size) {
     fprintf (stderr, "Error: The statistical sample size is larger than the "
-                 "population size.\n");
+		     "population size.\n");
     return 1;
   }
 
   // If we're using population bottlenecks, then do a series of sanity checks to
   // make sure that the bottleneck doesn't extend past the end of the
   // generations, etc.
-  if (sp->drift_model == SHARP_BOTTLENECK_DRIFT) {
-    if (sp->sharp_bottleneck_start > sp->generations) {
+  if (sp->g.drift_model == SHARP_BOTTLENECK_DRIFT) {
+    if (sp->m.bottleneck.start > sp->g.generations) {
       fprintf (stderr, "Error: The sharp bottleneck begins after the simulation "
-                   "ends.\n");
+		       "ends.\n");
       return 1;
     }
 
-    if (sp->sharp_bottleneck_start + sp->sharp_bottleneck_duration > sp->generations)
+    if (sp->m.bottleneck.start + sp->m.bottleneck.duration > sp->g.generations)
       fprintf (stderr, "Warning: The sharp bottleneck extends past the end of the simulation.\n");
 
-    if (sp->sharp_bottleneck_size > sp->population_size) {
+    if (sp->m.bottleneck.size > sp->g.population_size) {
       fprintf (stderr, "Error: The bottleneck size is larger than the total "
-                   "population size.\n");
+		       "population size.\n");
       return 1;
     }
   }
 
   // Same for even subdivision.
-  if (sp->drift_model == EVEN_SUBDIVISION_DRIFT) {
-    if (sp->even_subdivision_start > sp->generations) {
+  if (sp->g.drift_model == EVEN_SUBDIVISION_DRIFT) {
+    if (sp->m.subdivision.start > sp->g.generations) {
       fprintf (stderr, "Error: The even subdivision begins after the simulation "
-                   "ends.\n");
+		       "ends.\n");
       return 1;
     }
 
-    if (sp->even_subdivision_start + sp->even_subdivision_duration > sp->generations)
+    if (sp->m.subdivision.start + sp->m.subdivision.duration > sp->g.generations)
       fprintf (stderr, "Warning: The even subdivision extends past the end of the simulation.\n");
 
-    if (sp->even_subdivision_size > sp->population_size) {
+    if (sp->m.subdivision.size > sp->g.population_size) {
       fprintf (stderr, "Error: The even subdivision size is larger than the total "
-                   "population size.\n");
+		       "population size.\n");
       return 1;
     }
   }
@@ -2998,19 +3075,19 @@ unsigned int sanity_check (simulation_parameters *sp) {
   // If print_each_generation is set and more than one trial is occurring,
   // notify the user that they might have a difficult time separating out the
   // runs. This isn't an error, just an advisory.
-  if (sp->print_each_generation && sp->number_of_trials > 1)
+  if (sp->o.print_each_generation && sp->o.trials > 1)
     fprintf (stderr, "Warning: Statistics are being printed at each generation, "
-                 "but more than one trial is being run. This is perfectly "
-                 "legal, but it may be difficult to separate the data once "
-                 "the simulation is finished. (Since multiple trials will "
-                 "be difficult to tell apart.)\n");
+		     "but more than one trial is being run. This is perfectly "
+		     "legal, but it may be difficult to separate the data once "
+		     "the simulation is finished. (Since multiple trials will "
+		     "be difficult to tell apart.)\n");
 
   // If the selection coefficient is negative or greater than 1, then issue a
   // warning indicating that the user has deviated from biological realism.
-  if (sp->purifying_selection_coefficient < 0.0 ||
-      sp->purifying_selection_coefficient > 1.0) {
+  if (sp->m.purifying.selection_coefficient < 0.0 ||
+      sp->m.purifying.selection_coefficient > 1.0) {
     fprintf (stderr, "Error: Selection coefficients not between 0 and 1 "
-                 "are not biologically realistic.\n");
+		     "are not biologically realistic.\n");
     return 1;
   }
 
@@ -3018,10 +3095,13 @@ unsigned int sanity_check (simulation_parameters *sp) {
 }
 \end{ccode}
 
-     This main method can be called by the actual main method to provide all of
-     the default functionality of the model. All memory is freed and command
-     options are parsed from stdin. The first command-line argument becomes the
-     image name of this instance.
+      \subsubsection{Main method delegation}
+	\label{sec:main-method-delegation}
+
+	This main method can be called by the actual main method to provide all
+	of the default functionality of the model. All memory is freed and
+	command options are parsed from stdin. The first command-line argument
+	becomes the image name of this instance.
 
 \begin{ccode}
 int main_delegate (int argc, char** argv) {
@@ -3050,7 +3130,7 @@ int main_delegate (int argc, char** argv) {
 }
 \end{ccode}
 
-  \section{Conclusion}
+  \section{Closing}
 
     This section isn't a proper conclusion so much as a separate section for the
     necessary \verb|#endif| directive to match the \verb|#ifndef __MODEL_H| at the beginning
