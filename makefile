@@ -10,20 +10,25 @@ TEX_OPTS	=
 
 VALGRIND	= valgrind
 VALGRIND_OPTS	= --leak-check=full -v --show-reachable=yes
+MEMCHECK_OPTS	= --tool=memcheck
 CACHEGRIND_OPTS	= --tool=cachegrind
 
-.PHONY: bin cache doc mem
+.PHONY: bin cache clean doc mem
 
 bin: model-runtime model-debug
 
 cache: model-debug
-	$(VALGRIND) $(CACHEGRIND_OPTS) ./$< < profiles/cache
+	$(VALGRIND) $(CACHEGRIND_OPTS) ./$< < profiles/cache || echo
+
+clean:
+	rm -f *.aux *.dvi *.h *.log *.out *.pdf *.toc model-runtime model-debug
 
 doc: model.pdf
 
 mem: model-debug
 	$(VALGRIND) $(VALGRIND_OPTS) ./$< < profiles/mem1 || echo
 	$(VALGRIND) $(VALGRIND_OPTS) ./$< < profiles/mem2 | $(VALGRIND) $(VALGRIND_OPTS) ./$< || echo
+	$(VALGRIND) $(MEMCHECK_OPTS) ./$< < profiles/mem1 || echo
 
 prof: model-debug
 	$< < profiles/prof && $(GPROF) $(GPROF_OPTS) $< > prof
