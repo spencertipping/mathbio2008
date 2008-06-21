@@ -1,5 +1,10 @@
 CC		= gcc
 CC_OPTS		= -O3 -mtune=native -std=c99 -fgnu89-inline -lm -Wall -g
+CC_RUN_OPTS	= $(CC_OPTS)
+CC_DEBUG_OPTS	= $(CC_OPTS) -DDEBUG -pg
+
+GPROF		= gprof
+GPROF_OPTS	=
 
 SD		= sd
 SD_OPTS		= --no-cpp --extension=h --literal-language=ccode --line-comment=//
@@ -31,13 +36,13 @@ mem: model-debug
 	$(VALGRIND) $(MEMCHECK_OPTS) ./$< < profiles/mem1 || echo
 
 prof: model-debug
-	$< < profiles/prof && $(GPROF) $(GPROF_OPTS) $< > prof
+	./$< < profiles/prof && $(GPROF) $(GPROF_OPTS) $< > prof
 
 model-runtime: ca-rng.h model.h model-runtime.c
-	$(CC) $(CC_OPTS) -o $@ model-runtime.c
+	$(CC) $(CC_RUN_OPTS) -o $@ model-runtime.c
 
 model-debug: ca-rng.h model.h model-runtime.c
-	$(CC) $(CC_OPTS) -fno-inline -pg -o $@ model-runtime.c
+	$(CC) $(CC_DEBUG_OPTS) -o $@ model-runtime.c
 
 %.pdf: %.tex
 	$(LATEX) $(TEX_OPTS) $< && $(PDFLATEX) $(TEX_OPTS) $<

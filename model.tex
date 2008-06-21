@@ -526,6 +526,27 @@ $ ./model-runtime < profiles/my_profile > output.csv
 #include "ca-rng.h"
 \end{ccode}
 
+    \subsection{Conditional Inlining}
+      \label{sec:inlining}
+
+      When we're debugging, we want to have a lot of granularity in profiling
+      runs. However, the main simulation will perform better if more functions
+      are rolled into one. Therefore, we define a preprocessor directive for
+      conditional inlining that will expand to the \verb|inline| keyword when
+      we're compiling a runtime build and will expand to nothing when we're
+      compiling a debugging build.
+
+      Some functions are so small that they are always inlined; these are marked
+      with the standard \verb|inline| keyword.
+
+\begin{ccode}
+#ifdef DEBUG
+  #define conditional_inline
+#else
+  #define conditional_inline inline
+#endif
+\end{ccode}
+
     \subsection{{\em Malloc} Wrappers}
       \label{sec:malloc}
 
@@ -546,7 +567,7 @@ inline void *safe_malloc (size_t size) {
   }
 }
 
-unsigned int free_return_true (void *v) {
+inline unsigned int free_return_true (void *v) {
   free (v);
   return ! 0;
 }
@@ -950,7 +971,7 @@ inline codon_set codon_set_count_half (codon_set _s) {
          ((_s & 0x20820820ull) >> 5);
 }
 
-inline unsigned int codon_set_count (codon_set s) {
+conditional_inline unsigned int codon_set_count (codon_set s) {
   // Count by halves. This code uses a mod-63 algorithm described in the
   // writeup.
   return codon_set_count_half ((s >> 32) & 0xffffffffull) % 63 +
@@ -968,7 +989,7 @@ inline bool changes_in_group (codon_set a, codon_set b, codon_set c, codon_set d
             (b == 0 && c == 0 && d == 0));
 }
 
-inline int codon_set_singleton (codon_set s) {
+conditional_inline int codon_set_singleton (codon_set s) {
   // Returns -1 if the set is not a singleton, and 0, 1, or 2 if the set is a
   // singleton. The 0, 1, or 2 will indicate whether the least significant,
   // middle, or most significant nucleotide changed, respectively.
@@ -1018,7 +1039,7 @@ inline bool exactly_one (bool a, bool b, bool c, bool d) {
           (b && c) || (b && d) || (c && d));
 }
 
-inline bool codon_set_synonymous (codon_set s) {
+conditional_inline bool codon_set_synonymous (codon_set s) {
   // Determines whether exactly two codons in a codon set are synonymous with
   // one another.
   if (codon_set_inside (s, 0x00f000f000f000f0ull))
@@ -1065,7 +1086,7 @@ inline bool codon_set_synonymous (codon_set s) {
       individual codons.
 
 \begin{ccode}
-inline codon codon_set_mask (codon_set s) {
+conditional_inline codon codon_set_mask (codon_set s) {
   codon result = 0;
   if (! (codon_set_inside (s, 0xffff000000000000ull) ||
          codon_set_inside (s, 0x0000ffff00000000ull) ||
@@ -1117,7 +1138,7 @@ inline codon codon_set_mask (codon_set s) {
       \end{enumerate}
 
 \begin{ccode}
-inline sequence *copy_sequence (sequence *source, sequence *dest) {
+conditional_inline sequence *copy_sequence (sequence *source, sequence *dest) {
   // This function is called a lot, so any optimizations here are going to make
   // a big difference. We use memcpy to copy the actual data, since that is
   // going to be the fastest way to copy a continuous segment of memory.
@@ -1126,8 +1147,8 @@ inline sequence *copy_sequence (sequence *source, sequence *dest) {
   return dest;
 }
 
-inline sequence *recombine_sequences (sequence *s1, sequence *s2, sequence *dest,
-				      unsigned int nucleotide_index) {
+conditional_inline sequence *recombine_sequences (
+    sequence *s1, sequence *s2, sequence *dest, unsigned int nucleotide_index) {
   unsigned int ci = nucleotide_index / 3;
   unsigned int ni = nucleotide_index % 3;
 
@@ -1279,6 +1300,91 @@ sequence *read_sequence (const char *input) {
   }
 
   return result;
+}
+\end{ccode}
+
+    \subsection{Populations}
+      \label{sec:populations}
+
+      Populations are indexed collections of sequences. We work mainly with
+      populations, so we define several functions that take a population and
+      return given results.
+
+      \subsubsection{Selective fitness}
+
+	Natural selection prefers some individuals to others for reproductive
+	fitness.  Thus some individuals are more likely to be parents than
+	others, and that bias is reflected by assigning a coefficient to each
+	individual within a population.  When we consider the fitness
+	coefficients of all of the individuals, then we have a fitness vector,
+	keyed just as the individuals are.
+
+	While the population functions provide the ability to compute the
+	fitnesses of each individual, they do not make decisions about
+	parentage.  This is to facilitate options such as using an isolation
+	matrix, which is implemented later.
+
+	Fitness vectors have one important peculiarity, and that is that they
+	are stored cumulatively. So a fitness vector of all ones would look like
+	$\langle 1, 2, 3, 4, \cdots, n \rangle$. The reason for this is to
+	enable a binary search instead of a linear one for parent selection. For
+	a population size of 500, this makes it about 25 times faster.
+	Algorithmically speaking, it makes a neutral model run $O(n \log n)$
+	instead of $O(n^2)$. The fitness vector structure is defined in section
+	\ref{sec:structure-definitions}.
+
+\begin{ccode}
+#define __fitness_vector_binary_operation__(function_name, op) \
+conditional_inline fitness_vector *function_name (fitness_vector *v1, fitness_vector *v2, \
+						  fitness_vector *dest) { \
+  double last_1 = 0.0; \
+  double last_2 = 0.0; \
+  ensure_fitness_vector (dest, v1->length); \
+  for (unsigned int i = 0; i < v1->length; i++) { \
+   dest->data[i] = (v1->data[i] - last_1) op (v2->data[i] - last_2) + \
+     ((i > 0) ? dest->data[i - 1] : 0.0); \
+   last_1 = v1->data[i]; \
+   last_2 = v2->data[i]; \
+  } \
+  return dest; \
+}
+
+__fitness_vector_binary_operation__(fitness_vector_add, +)
+__fitness_vector_binary_operation__(fitness_vector_mul, *)
+
+inline double fitness_vector_magnitude (fitness_vector *v)
+  {return v->data[v->length - 1];}
+
+conditional_inline unsigned int choose_individual (double d, fitness_vector *v, population *p) {
+  // We assume that d is between 0 and 1. Choosing an individual involves
+  // computing the magnitude of v and scaling by that much.
+  // This function is O(n log n) in the size of the fitness vector, since a
+  // binary search is used.
+  if (v != NULL) {
+    // Binary-search the population.
+    double		point 	= d * fitness_vector_magnitude (v);
+    unsigned int	shift 	= (v->length / 4) | 1;
+    unsigned int	result 	= v->length / 2;
+
+    if (point == 0.0)
+      return 0;
+
+    while (TRUE) {
+      if (result >= v->length)	result = v->length - 1;
+      if (result < 0)		result = 0;
+
+      if (v->data[result] < point)
+	result += shift;
+      else if (result > 0 && v->data[result - 1] > point)
+	result -= shift;
+      else
+	return result;
+
+      shift = (shift / 2) | 1;
+    }
+  } else
+    // Simply choose a random element, since they all carry the same weight.
+    return random_integer () % p->length;
 }
 \end{ccode}
 
@@ -1531,91 +1637,6 @@ void delete_simulation_parameters (simulation_parameters *sp) {
 }
 \end{ccode}
 
-  \section{Populations}
-    \label{sec:populations}
-
-    Populations are indexed collections of sequences. We work mainly with
-    populations, so we define several functions that take a population and
-    return given results.
-
-    \subsection{Selective Fitness}
-
-      Natural selection prefers some individuals to others for reproductive
-      fitness.  Thus some individuals are more likely to be parents than others,
-      and that bias is reflected by assigning a coefficient to each individual
-      within a population.  When we consider the fitness coefficients of all of
-      the individuals, then we have a fitness vector, keyed just as the
-      individuals are.
-
-      While the population functions provide the ability to compute the
-      fitnesses of each individual, they do not make decisions about parentage.
-      This is to facilitate options such as using an isolation matrix, which is
-      implemented later.
-
-      Fitness vectors have one important peculiarity, and that is that they are
-      stored cumulatively. So a fitness vector of all ones would look like
-      $\langle 1, 2, 3, 4, \cdots, n \rangle$. The reason for this is to enable
-      a binary search instead of a linear one for parent selection. For a
-      population size of 500, this makes it about 25 times faster.
-      Algorithmically speaking, it makes a neutral model run $O(n \log n)$
-      instead of $O(n^2)$. The fitness vector structure is defined in section
-      \ref{sec:structure-definitions}.
-
-\begin{ccode}
-#define __fitness_vector_binary_operation__(function_name, op) \
-inline fitness_vector *function_name (fitness_vector *v1, fitness_vector *v2, \
-				      fitness_vector *dest) { \
-  double last_1 = 0.0; \
-  double last_2 = 0.0; \
-  ensure_fitness_vector (dest, v1->length); \
-  for (unsigned int i = 0; i < v1->length; i++) { \
-   dest->data[i] = (v1->data[i] - last_1) op (v2->data[i] - last_2) + \
-     ((i > 0) ? dest->data[i - 1] : 0.0); \
-   last_1 = v1->data[i]; \
-   last_2 = v2->data[i]; \
-  } \
-  return dest; \
-}
-
-__fitness_vector_binary_operation__(fitness_vector_add, +)
-__fitness_vector_binary_operation__(fitness_vector_mul, *)
-
-inline double fitness_vector_magnitude (fitness_vector *v)
-  {return v->data[v->length - 1];}
-
-inline unsigned int choose_individual (double d, fitness_vector *v, population *p) {
-  // We assume that d is between 0 and 1. Choosing an individual involves
-  // computing the magnitude of v and scaling by that much.
-  // This function is O(n log n) in the size of the fitness vector, since a
-  // binary search is used.
-  if (v != NULL) {
-    // Binary-search the population.
-    double		point 	= d * fitness_vector_magnitude (v);
-    unsigned int	shift 	= (v->length / 4) | 1;
-    unsigned int	result 	= v->length / 2;
-
-    if (point == 0.0)
-      return 0;
-
-    while (TRUE) {
-      if (result >= v->length)	result = v->length - 1;
-      if (result < 0)		result = 0;
-
-      if (v->data[result] < point)
-	result += shift;
-      else if (result > 0 && v->data[result - 1] > point)
-	result -= shift;
-      else
-	return result;
-
-      shift = (shift / 2) | 1;
-    }
-  } else
-    // Simply choose a random element, since they all carry the same weight.
-    return random_integer () % p->length;
-}
-\end{ccode}
-
   \section{Statistics}
     \label{sec:statistics}
 
@@ -1819,7 +1840,7 @@ void compute_variance_coefficients (population *p, simulation_parameters *sp, st
       functions.
 
 \begin{ccode}
-inline codon_set codon_site_set (population *p, unsigned int ci) {
+conditional_inline codon_set codon_site_set (population *p, unsigned int ci) {
   // Builds and returns the codon set constructed from codon site ci.
   codon_set result = 0ull;
   for (unsigned int i = 0; i < p->length; i++)
@@ -2009,17 +2030,22 @@ void compute_theta_site (population *p, simulation_parameters *sp, statistics *r
 
     // If the site segregates, then we compute theta for it. Otherwise, we pass
     // it up.
-    result->theta_site_seg.data[codon_site] = (cs_size > 1) ? 1.0 : 0.0;
+    result->theta_site_seg.data[codon_site] = 0.0;
+
+    codon cs_mask = codon_set_mask (cs);
+
+    for (unsigned int i = 0; i < 3; i++)
+      if (cs_mask & (1 << (i * 2)))
+	result->theta_site_seg.data[codon_site] += 1.0;
 
     if (cs_size == 2 && codon_set_singleton (cs) != -1) {
       // It's a singleton. In this case, it's either synonymous or not.
       if (! codon_set_synonymous (cs))
 	result->theta_site_non.data[codon_site] = 1.0;
-    } else if (cs_size > 1) {
+    } else if (cs_size > 1)
       // Determine which nucleotides segregate.
-      codon set_mask = codon_set_mask (cs);
       for (unsigned int i = 0; i < 3; i++)
-	if (set_mask & (1 << (i * 2))) {
+	if (cs_mask & (1 << (i * 2))) {
 	  // The condition on this if statement is just a way of determining
 	  // whether we see mutation at a given nucleotide site.
 	  double nc        = sp->i.assumed_gl_variance * (double) result->dng_size[i];
@@ -2047,8 +2073,6 @@ void compute_theta_site (population *p, simulation_parameters *sp, statistics *r
 
 	  result->theta_site_non.data[codon_site] += non;
 	}
-    }
-
 }
 
 void compute_theta (population *p, simulation_parameters *sp, statistics *result) {
@@ -2480,8 +2504,8 @@ inline nucleotide choose_nucleotide (nucleotide existing, hky85_parameters *p) {
   else					return _g;
 }
 
-inline void mutate_sequence (sequence *s, simulation_parameters *sp,
-			     unsigned int generation, unsigned int individual) {
+conditional_inline void mutate_sequence (sequence *s, simulation_parameters *sp,
+					 unsigned int generation, unsigned int individual) {
   hky85_parameters *p = &sp->g.mutation;
   double given_probability = pow (1.0 - p->mutations_per_nucleotide, s->length * 3);
 
@@ -2529,7 +2553,7 @@ inline void mutate_sequence (sequence *s, simulation_parameters *sp,
 	    any possibilities for optimization at the moment.)
 
 \begin{ccode}
-inline double purifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
+conditional_inline double purifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
   double	result          = 1.0;
   double	drop_factor     = 1.0 - sp->m.purifying.selection_coefficient;
   unsigned int	i            	= 0;
@@ -2557,7 +2581,7 @@ inline double purifying_selection (population *p, unsigned int idx, simulation_p
 	position. Then we divide by the number of other individuals.
 
 \begin{ccode}
-inline double diversifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
+conditional_inline double diversifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
   unsigned int differences = 0;
   unsigned int stop_position = p->data[idx].length;
 
@@ -2634,7 +2658,7 @@ inline double even_population_subdivision (
       each child sequence.
 
 \begin{ccode}
-inline void populate_parent_fitness (population *parents, simulation_parameters *sp) {
+conditional_inline void populate_parent_fitness (population *parents, simulation_parameters *sp) {
   // Creates the vector for the parents' fitnesses and stores it in sp.
   for (unsigned int i = 0; i < parents->length; i++) {
     double current;
@@ -2656,7 +2680,7 @@ inline void populate_parent_fitness (population *parents, simulation_parameters 
   }
 }
 
-inline void consider_drift_on_fitness (population *parents, unsigned int generation,
+conditional_inline void consider_drift_on_fitness (population *parents, unsigned int generation,
 				       unsigned int child_index, simulation_parameters *sp) {
   // Multiplies drift into the resulting fitness vector.
   if (sp->g.drift_model != NEUTRAL_DRIFT) {
@@ -2684,10 +2708,10 @@ inline void consider_drift_on_fitness (population *parents, unsigned int generat
   }
 }
 
-inline void do_trace_recombination (unsigned int split_point, unsigned int generation,
-				    unsigned int child_index, unsigned int p1, unsigned int p2,
-				    population *parents, population *children,
-				    simulation_parameters *sp) {
+conditional_inline void do_trace_recombination (
+    unsigned int split_point, unsigned int generation,
+    unsigned int child_index, unsigned int p1, unsigned int p2,
+    population *parents, population *children, simulation_parameters *sp) {
   // Fills in the history for the given individual based on the fact that a
   // recombination event occurred.
   if (sp->o.full_tracing) {
@@ -2723,9 +2747,9 @@ inline void do_trace_recombination (unsigned int split_point, unsigned int gener
   }
 }
 
-inline void do_trace_inheritance (unsigned int child_index, unsigned int parent_index,
-				  unsigned int generation, population *children,
-				  simulation_parameters *sp) {
+conditional_inline void do_trace_inheritance (
+    unsigned int child_index, unsigned int parent_index,
+    unsigned int generation, population *children, simulation_parameters *sp) {
   // Fills in the history for an individual based on the fact that normal
   // inheritance occurred.
   if (sp->o.full_tracing)
@@ -2741,10 +2765,10 @@ inline void do_trace_inheritance (unsigned int child_index, unsigned int parent_
     }
 }
 
-inline void perform_inheritance (population *parents, population *children,
-				 unsigned int child_index, unsigned int generation,
-				 fitness_vector *parent_fitness,
-				 simulation_parameters *sp) {
+conditional_inline void perform_inheritance (
+    population *parents, population *children,
+    unsigned int child_index, unsigned int generation,
+    fitness_vector *parent_fitness, simulation_parameters *sp) {
   // Inherits from either one or two parents, as appropriate.
   if (normalized_random () < sp->g.recombination_rate) {
     // Perform a recombination. This means that we choose two distinct parents
@@ -2774,8 +2798,9 @@ inline void perform_inheritance (population *parents, population *children,
   }
 }
 
-inline void choose_parents (population *parents, population *children,
-			    simulation_parameters *sp, unsigned int generation) {
+conditional_inline void choose_parents (
+    population *parents, population *children,
+    simulation_parameters *sp, unsigned int generation) {
   // Run through the population and recombine where necessary, performing simple
   // redirection where possible. There may be places where time could be saved
   // by pointer shuffling rather than data copies, but I'm not seeing them yet.
@@ -2823,7 +2848,7 @@ inline void choose_parents (population *parents, population *children,
 	\ref{sec:sequence-forms}.
 
 \begin{ccode}
-void print_sequences (population *p, FILE *f, bool packed) {
+conditional_inline void print_sequences (population *p, FILE *f, bool packed) {
   // Prints all of the sequences in a population, optionally in packed form.
 
   for (unsigned int i = 0; i < p->length; i++) {
@@ -2876,7 +2901,7 @@ void print_d_values (population *p, simulation_parameters *sp) {
   p->length = old_length;
 }
 
-void print_trial_indicator (unsigned int current_trial, simulation_parameters *sp) {
+inline void print_trial_indicator (unsigned int current_trial, simulation_parameters *sp) {
   fprintf (stderr, "Image %s: Trial %d of %d\n",
 	   sp->image_name, current_trial, sp->o.trials);
 }
@@ -2916,7 +2941,7 @@ void simulate_trial (simulation_parameters *sp, population *parents, population 
   }
 }
 
-void read_trial (simulation_parameters *sp, population *parents, population *children) {
+conditional_inline void read_trial (simulation_parameters *sp, population *parents, population *children) {
   // Reads a trial's worth of data from stdin into the parent population.
   char s[65536];
   for (unsigned int i = 0; i < sp->g.population_size; i++) {
