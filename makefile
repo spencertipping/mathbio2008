@@ -20,15 +20,23 @@ CACHEGRIND_OPTS	= --tool=cachegrind
 
 PROFILES	= linked-profiles
 
-.PHONY: bin cache clean doc mem
+.PHONY: all bin bench cache check clean doc mem
+
+all: bin doc
 
 bin: model-runtime model-debug
+
+bench: model-runtime
+	time ./$< < $(PROFILES)/bench > /dev/null
 
 cache: model-debug
 	$(VALGRIND) $(CACHEGRIND_OPTS) ./$< < $(PROFILES)/cache || echo
 
+check: model-runtime
+	./$< < $(PROFILES)/check > check.csv
+
 clean:
-	rm -f *.aux *.dvi *.h *.log *.out *.pdf *.toc model-runtime model-debug
+	rm -f *.aux *.dvi *.h *.log *.out *.pdf *.toc model-runtime model-debug prof check.csv
 
 doc: model.pdf
 

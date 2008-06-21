@@ -439,10 +439,23 @@ $ ./model-runtime < profiles/my_profile > output.csv
           \item[\tt make all]
           Rebuilds the entire system, including documentation.
 
+	  \item[\tt make bench]
+	  Benchmarks an execution of the neutral model under standard settings.
+	  This is used to detect model-independent speed improvements.
+
           \item[\tt make bin]
           Rebuilds all binaries but not documentation. This is especially useful
           to observe any warnings printed by GCC without scrolling past \TeX
           output.
+
+	  \item[\tt make check]
+	  Produces a file named \verb|check.csv|, which contains sequences and
+	  their resulting statistical output. This is used to verify the
+	  accuracy of the statistical computation code in section
+	  \ref{sec:statistics}.
+
+	  \item[\tt make clean]
+	  Deletes all generated files. Used to clean the working directory.
 
           \item[\tt make doc]
           Rebuilds this documentation.
@@ -2845,12 +2858,13 @@ conditional_inline void choose_parents (
 	\ref{sec:sequence-forms}.
 
 \begin{ccode}
-conditional_inline void print_sequences (population *p, FILE *f, bool packed) {
+conditional_inline void print_sequences (population *p, FILE *f,
+					 simulation_parameters *sp, bool packed) {
   // Prints all of the sequences in a population, optionally in packed form.
 
-  for (unsigned int i = 0; i < p->length; i++) {
+  for (unsigned int i = 0; i < sp->g.sample_size; i++) {
     if (! packed)
-      printf ("Sequence %d of %d:, ", i + 1, p->length);
+      printf ("Sequence %d of %d:, ", i + 1, sp->g.sample_size);
 
     print_sequence (p->data + i, f, packed);
     printf ("\n");
@@ -2986,10 +3000,10 @@ void make_profile_if_necessary (simulation_parameters *sp) {
 	    "'%s'.\n"
 	    "end-comment\n\n"
 	    "trials: %d\n"
-	    "population-size: %d\n"
+	    "population-size: %d\n"	// Deliberately set to sample size.
 	    "statistics-only\n"
 	    "end-of-options\n",
-	    sp->i.random_seed, sp->image_name, sp->o.trials, sp->g.population_size);
+	    sp->i.random_seed, sp->image_name, sp->o.trials, sp->g.sample_size);
 }
 
 void run_trials (simulation_parameters *sp) {
@@ -3023,9 +3037,9 @@ void run_trials (simulation_parameters *sp) {
     // purposes we pack the sequences to save on storage space and read/write
     // time.
     if (sp->o.print_sequences)
-      print_sequences (parents, stdout, FALSE);
+      print_sequences (parents, stdout, sp, FALSE);
     else if (sp->p.simulation_only) {
-      print_sequences (parents, stdout, TRUE);
+      print_sequences (parents, stdout, sp, TRUE);
       printf ("\n");
     }
 
