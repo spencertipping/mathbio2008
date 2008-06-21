@@ -2353,12 +2353,12 @@ uint64_t count_mutations (population *p, simulation_parameters *sp, bool by_stat
   // that the number of non mutations occupies the high 32 bits and the total
   // number of mutations occupies the low 32 bits.
 
-  bool        *individuals_seen 	= (bool*) malloc (sizeof (bool) * sp->g.population_size);
-  bool        *last_individuals_seen	= (bool*) malloc (sizeof (bool) * sp->g.population_size);
-  bool        *temp			= NULL;
-  unsigned int non_mutations		= 0;
-  unsigned int total_mutations		= 0;
-  unsigned int current_generation	= sp->g.generations - 1;
+  bool       	*individuals_seen 	= (bool*) malloc (sizeof (bool) * sp->g.population_size);
+  bool       	*last_individuals_seen	= (bool*) malloc (sizeof (bool) * sp->g.population_size);
+  bool       	*temp			= NULL;
+  unsigned int	non_mutations		= 0;
+  unsigned int	total_mutations		= 0;
+  int		current_generation	= sp->g.generations - 1;
 
   // Initialize to have seen only the individuals in the population.
   for (unsigned int i = 0; i < sp->g.population_size; i++)
@@ -2400,6 +2400,9 @@ uint64_t count_mutations (population *p, simulation_parameters *sp, bool by_stat
     current_generation--;
   }
 
+  free (individuals_seen);	individuals_seen	= NULL;
+  free (last_individuals_seen); last_individuals_seen	= NULL;
+
   return ((uint64_t) non_mutations << 32) | total_mutations;
 }
 
@@ -2409,6 +2412,9 @@ void compute_traced_values (population *p, simulation_parameters *sp, statistics
   // likelihoods, and random numbers.
 
   unsigned int sample_size = p->data[0].length;
+
+  ensure_site_statistic (&result->traced_site_seg, p->data[0].length);
+  ensure_site_statistic (&result->traced_site_non, p->data[0].length);
 
   for (unsigned int ci = 0; ci < p->data[0].length; ci++)
     if (codon_set_multipliton (codon_site_set (p, ci))) {
