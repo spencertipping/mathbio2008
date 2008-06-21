@@ -1477,6 +1477,9 @@ void initialize_simulation_parameters (simulation_parameters *sp) {
   sp->o.full_tracing				= FALSE;
   sp->o.make_profile				= FALSE;
 
+  sp->p.simulation_only				= FALSE;
+  sp->p.statistics_only				= FALSE;
+
   sp->m.bottleneck.start			= 200;
   sp->m.bottleneck.duration			= 500;
   sp->m.bottleneck.size				= 50;
@@ -2804,7 +2807,9 @@ void print_sequences (population *p, FILE *f, bool packed) {
   // Prints all of the sequences in a population, optionally in packed form.
 
   for (unsigned int i = 0; i < p->length; i++) {
-    printf ("Sequence %d of %d:, ", i + 1, p->length);
+    if (! packed)
+      printf ("Sequence %d of %d:, ", i + 1, p->length);
+
     print_sequence (p->data + i, f, packed);
     printf ("\n");
   }
@@ -2837,7 +2842,7 @@ void print_d_values (population *p, simulation_parameters *sp) {
     compute_estimator_accuracy 	(p, sp, &s);
 
     // Print out additional data about the accuracy of each estimator used.
-    printf (", %f, %f, %f, %f, %f, %f, %f, %f, %f, %f, %f",
+    printf (", %f, %f, %f, %f, %f, %f, %f, %f, %f, %f",
 	    s.gl_non_bias, s.gl_non_var,
 	    s.theta_site_seg_bias, s.theta_site_seg_var,
 	    s.theta_site_non_bias, s.theta_site_non_var,
@@ -3017,7 +3022,7 @@ unsigned int double_directive (FILE *f, const char *current, const char *key,
 			       double *value)
   {return ! strcmp (current, key) && fscanf (f, "%lf", value);}
 
-unsigned int sequence_directive (FILE *f, const char *current, const char *key,
+unsigned int sequence_directive (FILE *f, char *current, const char *key,
 				 sequence **value)
   {return ! strcmp (current, key) && fscanf (f, "%65535s", current) &&
 	  free_return_true (*value) && (*value = read_sequence (current));}
@@ -3026,7 +3031,7 @@ unsigned int boolean_directive (FILE *f, const char *current, const char *key,
 			        bool *value)
   {return ! strcmp (current, key) && (*value = TRUE);}
 
-unsigned int special_directives (FILE *f, const char *current,
+unsigned int special_directives (FILE *f, char *current,
 				 simulation_parameters *sp) {
   // Take care of keyword directives such as selection and drift.
   return ((! strcmp (current, "selection-model:")) && fscanf (f, "%65535s", current) &&
