@@ -20,7 +20,7 @@ CACHEGRIND_OPTS	= --tool=cachegrind
 
 PROFILES	= linked-profiles
 
-.PHONY: all bin bench cache check clean doc mem
+.PHONY: all bin bench cache check clean doc mem mem1 mem2 mem3
 
 all: bin doc
 
@@ -40,9 +40,15 @@ clean:
 
 doc: model.pdf
 
-mem: model-debug
+mem: mem1 mem2 mem3
+
+mem1: model-debug
 	$(VALGRIND) $(VALGRIND_OPTS) ./$< < $(PROFILES)/mem1 || echo
+
+mem2: model-debug
 	$(VALGRIND) $(VALGRIND_OPTS) ./$< < $(PROFILES)/mem2 | $(VALGRIND) $(VALGRIND_OPTS) ./$< || echo
+
+mem3: model-debug
 	$(VALGRIND) $(MEMCHECK_OPTS) ./$< < $(PROFILES)/mem1 || echo
 
 prof: model-debug

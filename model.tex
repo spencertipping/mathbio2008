@@ -47,7 +47,7 @@
 
     This file contains the core workings of the model, but it does not provide a
     runtime environment. The runtime is provided by \verb|model-runtime.c|,
-    which includes the header file produced by this \TeX document. Using the
+    which includes the header file produced by this \TeX{} document. Using the
     runtime environment requires a {\em profile}, which is a set of
     configuration information for a single simulation run.
 
@@ -59,8 +59,35 @@
       the format \verb|directive[: value]|, where \verb|value| may be a number,
       plain text (not inside quotation marks), or otherwise as dictated by the
       directive. Comments begin with the directive \verb|begin-comment| and end
-      with the directive \verb|end-comment|. Below is a list of the currently
+      with the directive \verb|end-comment|. Sections
+      \ref{sec:output-directives} and following contain a list of the currently
       supported directives and their functions.
+
+      \subsubsection{Nomenclatural conventions}
+	\label{sec:profile-nomenclature}
+
+	Profiles generally take on names such as \verb|p01|, \verb|g15|, etc.
+	Currently, I use this convention:
+
+	\begin{itemize}
+	  \item Standard complete-run profiles begin with \verb|p|.
+	  \item Simulation-only profiles (generators) begin with \verb|g|.
+	  \item Statistics-only profiles (results) begin with \verb|r|.
+	\end{itemize}
+
+	The output files are named according to the profile that generated them.
+	The first batch of output from the profile \verb|p12|, for example, is
+	named \verb|p12-001.csv|. Since the profiles serve as the only
+	substantial documentation for the settings used to generate an output
+	file, {\em a profile is never modified after it is used to generate
+	data}. A new profile is created instead. That way, finding out the
+	configuration that produced a data set is as simple as reading the
+	profile that generated it.
+
+	Statistics-only profiles follow the same nomenclature as the output
+	files, except that they begin with \verb|r| instead of \verb|p| or
+	\verb|g|. The same rule applies for the generator profile: It cannot be
+	modified once the output has been produced.
 
       \subsubsection{Notation}
         \label{sec:notation}
@@ -445,7 +472,7 @@ $ ./model-runtime < profiles/my_profile > output.csv
 
           \item[\tt make bin]
           Rebuilds all binaries but not documentation. This is especially useful
-          to observe any warnings printed by GCC without scrolling past \TeX
+          to observe any warnings printed by GCC without scrolling past \TeX{}
           output.
 
 	  \item[\tt make check]
@@ -1255,11 +1282,14 @@ void print_sequence (sequence *s, FILE *f, bool packed) {
 			    nucleotide_chars[pick (s->data[i], 0)]);
 }
 
-sequence *read_sequence (const char *input) {
+sequence *read_sequence (const char *input, sequence *dest) {
   unsigned int position = 0; 	// In nucleotides if reading a nucleotide-form
 				// sequence, and codons if packed-form.
   unsigned int l   	= 0;	// Same here.
-  sequence *result 	= create_sequence ();
+  sequence *result 	= dest;
+  
+  if (result == NULL)
+    result = create_sequence ();
 
   if (input[0] == '!') {
     // Read a packed-form sequence. We start at one to skip over the leading
@@ -1408,6 +1438,151 @@ conditional_inline unsigned int choose_individual (double d, fitness_vector *v, 
     program run. The data here corresponds strongly to the profile directives
     defined in section \ref{sec:profiles}.
 
+    \subsection{Statistical Structure}
+      \label{sec:statistical-structure}
+
+      We compute a set of statistics for each population. Since we may wish to
+      add more information later, we encapsulate this information into a large
+      structure whose fields are filled in by several different functions (see
+      section \ref{sec:statistics}).
+
+\begin{ccode}
+typedef struct {
+\end{ccode}
+
+      \subsubsection{Variance coefficients}
+
+	We need to compute some coefficients to find the variance of Tajima's
+	\D{}. These are described in more detail in section
+	\ref{sec:variance-coefficients}.
+
+\begin{ccode}
+  unsigned int		n;     		// Number of sequences per population
+  double		a1, a2, b1, b2,
+			c1, c2, e1, e2;	// Coefficients for variance calculation
+\end{ccode}
+
+      \subsubsection{Final results}
+
+	We compile the results below into final measurements such as $s_{syn}$,
+	$s_{non}$, $\theta_{syn}$, $\theta_{non}$, and $D_{syn}$ and $D_{non}$.
+
+\begin{ccode}
+  double		s_syn,		s_non;
+  double		theta_syn,	theta_non;
+  double		pi_syn,		pi_non;
+  double		d_syn,		d_non;
+\end{ccode}
+
+      \subsubsection{Discrete pi data}
+
+	The discrete pi statistical estimator uses discrete pathways. For this,
+        we don't collect any data ahead of time, so we just use a site statistic
+	to store the results.
+
+\begin{ccode}
+  site_statistic	discrete_pi_seg;
+  site_statistic	discrete_pi_non;
+  double		discrete_pi_seg_bias, discrete_pi_seg_var;
+  double		discrete_pi_non_bias, discrete_pi_non_var;
+\end{ccode}
+
+      \subsubsection{Continuous pi data}
+
+	If we create a continuous pairwise estimator, then we'll need to solve a
+	$64 \times 64$ system of linear equations and store the results here.
+	For now, however, this is not implemented.
+
+      \subsubsection{Parsimonious genetic likelihoods}
+
+	Genetic likelihood data consists of three 64-element vectors, where each
+	entry represents the number of nonsynonymous changes present at the
+	given codon at the given position.
+
+\begin{ccode}
+  double		gl_data[3][64];
+  site_statistic	gl_site_non;
+  double		gl_non_bias, gl_non_var;
+\end{ccode}
+
+      \subsubsection{Discrete Nei and Gojobori ratios}
+
+	Nei and Gojobori ratios are computed ahead of time for a sample. We
+	store the number of singletons at each site and the ratio of those
+	singletons that were nonsynonymous. We also keep track of the number of
+	times the singleton data was used to estimate the nonsynonymity of a
+	multipliton (for auditing purposes).
+
+\begin{ccode}
+  double		dng_data[3];
+  unsigned int		dng_size[3];
+  unsigned int		dng_multiplitons[3];
+\end{ccode}
+
+      \subsubsection{Theta}
+
+	The results for theta are stored sitewise so that we can measure the
+	effectiveness of various computing methods. Right now, we want to see
+	whether minimizing the estimator variance for theta is an improvement
+	over using whole selection.
+
+\begin{ccode}
+  site_statistic	theta_site_seg;
+  site_statistic	theta_site_non;
+  double		theta_site_seg_bias, theta_site_seg_var;
+  double		theta_site_non_bias, theta_site_non_var;
+\end{ccode}
+
+      \subsubsection{Traced values}
+
+	During the simulation process, we trace the actual mutation paths of the
+	individual codon sites if the \verb|full-tracing| option is specified.
+	Then we use backtracing to verify the accuracy of theta.
+
+\begin{ccode}
+  site_statistic	traced_site_seg;
+  site_statistic	traced_site_non;
+\end{ccode}
+
+      \subsubsection{Random estimator error}
+
+	To provide a benchmark for our statistical estimators, we use a random
+	number generator and measure its bias and variance.
+
+\begin{ccode}
+  double		random_seg_bias, random_seg_var;
+  double		random_non_bias, random_non_var;
+\end{ccode}
+
+      \subsubsection{Generic initialization methods}
+
+	This concludes the data elements of the statistical structure. We also
+	define methods to initialize and destroy statistics.
+
+\begin{ccode}
+} statistics;
+
+void initialize_statistics (statistics *s) {
+  init_site_statistic (&s->discrete_pi_seg);
+  init_site_statistic (&s->discrete_pi_non);
+  init_site_statistic (&s->gl_site_non);
+  init_site_statistic (&s->theta_site_seg);
+  init_site_statistic (&s->theta_site_non);
+  init_site_statistic (&s->traced_site_seg);
+  init_site_statistic (&s->traced_site_non);
+}
+
+void delete_statistics (statistics *s) {
+  delete_site_statistic (&s->discrete_pi_seg);
+  delete_site_statistic (&s->discrete_pi_non);
+  delete_site_statistic (&s->gl_site_non);
+  delete_site_statistic (&s->theta_site_seg);
+  delete_site_statistic (&s->theta_site_non);
+  delete_site_statistic (&s->traced_site_seg);
+  delete_site_statistic (&s->traced_site_non);
+}
+\end{ccode}
+
     \subsection{Selection and Drift Constants}
       \label{sec:selection-drift-constants}
 
@@ -1555,6 +1730,7 @@ typedef struct {
   population_history	*history;
   double		assumed_gl_variance;
   unsigned int		random_seed;
+  statistics		s;
 } simulation_internal_data;
 
 typedef struct {
@@ -1591,10 +1767,10 @@ void initialize_simulation_parameters (simulation_parameters *sp) {
 
   sp->g.ancestral_sequence = read_sequence (
     "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
-    "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
+    "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU", NULL);
   sp->m.purifying.optimal_sequence = read_sequence (
     "UGU-ACA-AGA-CCC-AAC-AAC-AAU-ACA-AUA-AAA-AGU-AUA-CAU-AUG-GGA-CUA-GGG-AGG-"
-    "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU");
+    "ACA-UUU-UAU-ACA-ACA-GGA-GAA-GUA-AUA-GGA-GAU-AUA-AGA-CAA-GCA-CAU-UGU", NULL);
 
   sp->m.purifying.selection_coefficient		= 0.1;
   sp->m.diversifying.selection_coefficient	= 0.1;
@@ -1618,6 +1794,8 @@ void initialize_simulation_parameters (simulation_parameters *sp) {
   sp->i.child_fitness_vector			= NULL;
   sp->i.result_fitness_vector			= NULL;
   sp->i.history					= NULL;
+
+  initialize_statistics	(&sp->i.s);
 }
 
 void delete_simulation_parameters (simulation_parameters *sp) {
@@ -1647,6 +1825,8 @@ void delete_simulation_parameters (simulation_parameters *sp) {
   delete_population_history (sp->i.history);
   free (sp->i.history);
   sp->i.history = NULL;
+
+  delete_statistics (&sp->i.s);
 }
 \end{ccode}
 
@@ -1657,150 +1837,6 @@ void delete_simulation_parameters (simulation_parameters *sp) {
     sense that the analyses performed here are under a lot of debate at any
     given time. Thus they are coded for maximum flexibility, often at some
     expense to performance.
-
-    \subsection{Statistical Structure}
-      \label{sec:statistical-structure}
-
-      We compute a set of statistics for each population. Since we may wish to
-      add more information later, we encapsulate this information into a large
-      structure whose fields are filled in by several different methods.
-
-\begin{ccode}
-typedef struct {
-\end{ccode}
-
-      \subsubsection{Variance coefficients}
-
-	We need to compute some coefficients to find the variance of Tajima's
-	\D{}. These are described in more detail in section
-	\ref{sec:variance-coefficients}.
-
-\begin{ccode}
-  unsigned int		n;     		// Number of sequences per population
-  double		a1, a2, b1, b2,
-			c1, c2, e1, e2;	// Coefficients for variance calculation
-\end{ccode}
-
-      \subsubsection{Final results}
-
-	We compile the results below into final measurements such as $s_{syn}$,
-	$s_{non}$, $\theta_{syn}$, $\theta_{non}$, and $D_{syn}$ and $D_{non}$.
-
-\begin{ccode}
-  double		s_syn,		s_non;
-  double		theta_syn,	theta_non;
-  double		pi_syn,		pi_non;
-  double		d_syn,		d_non;
-\end{ccode}
-
-      \subsubsection{Discrete pi data}
-
-	The discrete pi statistical estimator uses discrete pathways. For this,
-        we don't collect any data ahead of time, so we just use a site statistic
-	to store the results.
-
-\begin{ccode}
-  site_statistic	discrete_pi_seg;
-  site_statistic	discrete_pi_non;
-  double		discrete_pi_seg_bias, discrete_pi_seg_var;
-  double		discrete_pi_non_bias, discrete_pi_non_var;
-\end{ccode}
-
-      \subsubsection{Continuous pi data}
-
-	If we create a continuous pairwise estimator, then we'll need to solve a
-	$64 \times 64$ system of linear equations and store the results here.
-	For now, however, this is not implemented.
-
-      \subsubsection{Parsimonious genetic likelihoods}
-
-	Genetic likelihood data consists of three 64-element vectors, where each
-	entry represents the number of nonsynonymous changes present at the
-	given codon at the given position.
-
-\begin{ccode}
-  double		gl_data[3][64];
-  site_statistic	gl_site_non;
-  double		gl_non_bias, gl_non_var;
-\end{ccode}
-
-      \subsubsection{Discrete Nei and Gojobori ratios}
-
-	Nei and Gojobori ratios are computed ahead of time for a sample. We
-	store the number of singletons at each site and the ratio of those
-	singletons that were nonsynonymous. We also keep track of the number of
-	times the singleton data was used to estimate the nonsynonymity of a
-	multipliton (for auditing purposes).
-
-\begin{ccode}
-  double		dng_data[3];
-  unsigned int		dng_size[3];
-  unsigned int		dng_multiplitons[3];
-\end{ccode}
-
-      \subsubsection{Theta}
-
-	The results for theta are stored sitewise so that we can measure the
-	effectiveness of various computing methods. Right now, we want to see
-	whether minimizing the estimator variance for theta is an improvement
-	over using whole selection.
-
-\begin{ccode}
-  site_statistic	theta_site_seg;
-  site_statistic	theta_site_non;
-  double		theta_site_seg_bias, theta_site_seg_var;
-  double		theta_site_non_bias, theta_site_non_var;
-\end{ccode}
-
-      \subsubsection{Traced values}
-
-	During the simulation process, we trace the actual mutation paths of the
-	individual codon sites if the \verb|full-tracing| option is specified.
-	Then we use backtracing to verify the accuracy of theta.
-
-\begin{ccode}
-  site_statistic	traced_site_seg;
-  site_statistic	traced_site_non;
-\end{ccode}
-
-      \subsubsection{Random estimator error}
-
-	To provide a benchmark for our statistical estimators, we use a random
-	number generator and measure its bias and variance.
-
-\begin{ccode}
-  double		random_seg_bias, random_seg_var;
-  double		random_non_bias, random_non_var;
-\end{ccode}
-
-      \subsubsection{Generic initialization methods}
-
-	This concludes the data elements of the statistical structure. We also
-	define methods to initialize and destroy statistics.
-
-\begin{ccode}
-} statistics;
-
-void initialize_statistics (statistics *s) {
-  init_site_statistic (&s->discrete_pi_seg);
-  init_site_statistic (&s->discrete_pi_non);
-  init_site_statistic (&s->gl_site_non);
-  init_site_statistic (&s->theta_site_seg);
-  init_site_statistic (&s->theta_site_non);
-  init_site_statistic (&s->traced_site_seg);
-  init_site_statistic (&s->traced_site_non);
-}
-
-void delete_statistics (statistics *s) {
-  delete_site_statistic (&s->discrete_pi_seg);
-  delete_site_statistic (&s->discrete_pi_non);
-  delete_site_statistic (&s->gl_site_non);
-  delete_site_statistic (&s->theta_site_seg);
-  delete_site_statistic (&s->theta_site_non);
-  delete_site_statistic (&s->traced_site_seg);
-  delete_site_statistic (&s->traced_site_non);
-}
-\end{ccode}
 
     \subsection{Variance Coefficients}
       \label{sec:variance-coefficients}
@@ -1890,15 +1926,17 @@ void compute_genetic_likelihoods (population *p, simulation_parameters *sp, stat
   // Now estimate these likelihoods across sites.
   for (unsigned int i = 0; i < p->data[0].length; i++) {
     result->gl_site_non.data[i] = 0.0;
+    codon_set	cs	= codon_site_set (p, i);
+    codon	cs_mask	= codon_set_mask (cs);
 
     for (unsigned int j = 0; j < 3; j++)
       // Check for variance at position j.
-      if (codon_set_mask (codon_site_set (p, i)) & (1 << (2 * j))) {
+      if (cs_mask & (1 << (2 * j))) {
 	// If there's variance, then add up the average of all of the codons in
 	// this column.
 	double total = 0.0;
 	for (unsigned int k = 0; k < p->length; k++)
-	  total += result->gl_data[j][k];
+	  total += result->gl_data[j][_idx(p->data[k].data[i])];
 	result->gl_site_non.data[i] += total / (double) p->length;
       }
   }
@@ -2886,35 +2924,34 @@ void print_d_values (population *p, simulation_parameters *sp) {
   unsigned int old_length = p->length;
   p->length = sp->g.sample_size;
 
-  statistics s;
-  initialize_statistics 	(&s);
-  compute_variance_coefficients (p, sp, &s);
-  compute_theta          	(p, sp, &s);
-  compute_pi             	(p, sp, &s);
-  compute_d              	(p, sp, &s);
+  compute_variance_coefficients (p, sp, &sp->i.s);
+  compute_theta          	(p, sp, &sp->i.s);
+  compute_pi             	(p, sp, &sp->i.s);
+  compute_d              	(p, sp, &sp->i.s);
+
+  statistics *s = &sp->i.s;
 
   // Print a reasonable set of statistics.
   printf ("%f, %f, %f, %f, %f, %f, %f, %f, %d, %d, %d, %f, %f, %f, %d, %d, %d",
-	  s.d_syn, s.d_non, s.pi_syn, s.pi_non, s.theta_syn, s.theta_non,
-	  s.s_syn, s.s_non, s.dng_size[0], s.dng_size[1], s.dng_size[2],
-	  s.dng_data[0], s.dng_data[1], s.dng_data[2],
-	  s.dng_multiplitons[0], s.dng_multiplitons[1], s.dng_multiplitons[2]);
+	  s->d_syn, s->d_non, s->pi_syn, s->pi_non, s->theta_syn, s->theta_non,
+	  s->s_syn, s->s_non, s->dng_size[0], s->dng_size[1], s->dng_size[2],
+	  s->dng_data[0], s->dng_data[1], s->dng_data[2],
+	  s->dng_multiplitons[0], s->dng_multiplitons[1], s->dng_multiplitons[2]);
 
   if (sp->o.full_tracing) {
-    compute_estimator_accuracy 	(p, sp, &s);
+    compute_estimator_accuracy 	(p, sp, &sp->i.s);
 
     // Print out additional data about the accuracy of each estimator used.
     printf (", %f, %f, %f, %f, %f, %f, %f, %f, %f, %f",
-	    s.gl_non_bias, s.gl_non_var,
-	    s.theta_site_seg_bias, s.theta_site_seg_var,
-	    s.theta_site_non_bias, s.theta_site_non_var,
-	    s.random_seg_bias, s.random_seg_var,
-	    s.random_non_bias, s.random_non_var);
+	    s->gl_non_bias, s->gl_non_var,
+	    s->theta_site_seg_bias, s->theta_site_seg_var,
+	    s->theta_site_non_bias, s->theta_site_non_var,
+	    s->random_seg_bias, s->random_seg_var,
+	    s->random_non_bias, s->random_non_var);
   }
 
   printf ("\n");
 
-  delete_statistics (&s);
   p->length = old_length;
 }
 
@@ -2954,7 +2991,7 @@ void simulate_trial (simulation_parameters *sp, population *parents, population 
     children = temporary;
 
     if (sp->o.print_each_generation)
-     print_d_values (parents, sp);
+      print_d_values (parents, sp);
   }
 }
 
@@ -2963,12 +3000,7 @@ conditional_inline void read_trial (simulation_parameters *sp, population *paren
   char s[65536];
   for (unsigned int i = 0; i < sp->g.population_size; i++) {
     scanf ("%65535s", s);
-    sequence *seq = NULL;
-    delete_sequence (parents->data + i);
-    seq = read_sequence (s);
-    copy_sequence (seq, parents->data + i);
-    delete_sequence (seq);
-    free (seq);
+    read_sequence (s, parents->data + i);
   }
 }
 
@@ -2990,7 +3022,7 @@ void allocate_internal_memory (simulation_parameters *sp) {
     for (unsigned int i = 0; i < sp->g.generations; i++) {
       ensure_generation_history (sp->i.history->data + i, sp->g.population_size);
       for (unsigned int j = 0; j < sp->g.population_size; j++)
-       ensure_individual_history (sp->i.history->data[i].data + j, sp->g.ancestral_sequence->length);
+	ensure_individual_history (sp->i.history->data[i].data + j, sp->g.ancestral_sequence->length);
     }
   }
 }
@@ -3089,7 +3121,7 @@ unsigned int double_directive (FILE *f, const char *current, const char *key,
 unsigned int sequence_directive (FILE *f, char *current, const char *key,
 				 sequence **value)
   {return ! strcmp (current, key) && fscanf (f, "%65535s", current) &&
-	  free_return_true (*value) && (*value = read_sequence (current));}
+	  free_return_true (*value) && (*value = read_sequence (current, NULL));}
 
 unsigned int boolean_directive (FILE *f, const char *current, const char *key,
 			        bool *value)
