@@ -1632,6 +1632,7 @@ typedef struct {
   bool			make_profile;
   bool			print_each_generation;
   bool			full_tracing;
+  bool			trace_multiplitons_only;
 } output_parameters;
 \end{ccode}
 
@@ -1777,6 +1778,7 @@ void initialize_simulation_parameters (simulation_parameters *sp) {
   sp->o.print_sequences				= FALSE;
   sp->o.print_each_generation			= FALSE;
   sp->o.full_tracing				= FALSE;
+  sp->o.trace_multiplitons_only			= FALSE;
   sp->o.make_profile				= FALSE;
 
   sp->p.simulation_only				= FALSE;
@@ -2454,23 +2456,21 @@ void compute_traced_values (population *p, simulation_parameters *sp, statistics
   ensure_site_statistic (&result->traced_site_seg, p->data[0].length);
   ensure_site_statistic (&result->traced_site_non, p->data[0].length);
 
-  for (unsigned int ci = 0; ci < p->data[0].length; ci++)
-    if (codon_set_multipliton (codon_site_set (p, ci))) {
-      // Test the estimators here. We don't test them on singleton sites at the
-      // moment, nor do we test our assumptions about homoplasy by investigating
-      // invariant sites.
+  for (unsigned int ci = 0; ci < p->data[0].length; ci++) {
+    // Test the estimators here. We provide actual information on all sites,
+    // not just multipliton sites.
 
-      uint64_t		mutation_counts = count_mutations (p, sp, FALSE, ci);
-      unsigned int	non_mutations   = mutation_counts >> 32;
-      unsigned int	total_mutations = mutation_counts & 0xffffffffull;
+    uint64_t		mutation_counts = count_mutations (p, sp, FALSE, ci);
+    unsigned int	non_mutations   = mutation_counts >> 32;
+    unsigned int	total_mutations = mutation_counts & 0xffffffffull;
 
-      result->traced_site_seg.data[ci] = (double) total_mutations /
-					 (double) (sample_size * (sample_size - 1) / 2);
+    result->traced_site_seg.data[ci] = (double) total_mutations /
+				       (double) (sample_size * (sample_size - 1) / 2);
 
-      result->traced_site_non.data[ci] = (total_mutations > 0) ?
-					   (double) non_mutations / (double) total_mutations :
-					   0.0;
-    }
+    result->traced_site_non.data[ci] = (total_mutations > 0) ?
+					 (double) non_mutations / (double) total_mutations :
+					 0.0;
+  }
 }
 \end{ccode}
 
@@ -2493,34 +2493,35 @@ void compute_estimator_accuracy (population *p, simulation_parameters *sp, stati
   result->random_seg_bias	= result->random_seg_var	= 0.0;
   result->random_non_bias	= result->random_non_var	= 0.0;
 
-  for (unsigned int i = 0; i < result->traced_site_seg.length; i++) {
-    double gl_non_error		= result->gl_site_non.data[i] - result->traced_site_non.data[i];
-    double theta_seg_error	= result->theta_site_seg.data[i] - result->traced_site_seg.data[i];
-    double theta_non_error	= result->theta_site_non.data[i] - result->traced_site_non.data[i];
-    double random_seg_error	= normalized_random () - result->traced_site_seg.data[i];
-    double random_non_error	= normalized_random () - result->traced_site_non.data[i];
+  for (unsigned int i = 0; i < result->traced_site_seg.length; i++)
+    if (! sp->o.trace_multiplitons_only || codon_set_multipliton (codon_site_set (p, i))) {
+      double gl_non_error		= result->gl_site_non.data[i] - result->traced_site_non.data[i];
+      double theta_seg_error		= result->theta_site_seg.data[i] - result->traced_site_seg.data[i];
+      double theta_non_error		= result->theta_site_non.data[i] - result->traced_site_non.data[i];
+      double random_seg_error		= normalized_random () - result->traced_site_seg.data[i];
+      double random_non_error		= normalized_random () - result->traced_site_non.data[i];
 
-    result->gl_non_bias		+= gl_non_error;
-    result->gl_non_var		+= gl_non_error * gl_non_error;
+      result->gl_non_bias		+= gl_non_error;
+      result->gl_non_var		+= gl_non_error * gl_non_error;
 
-    result->theta_site_seg_bias += theta_seg_error;
-    result->theta_site_seg_var	+= theta_seg_error * theta_seg_error;
+      result->theta_site_seg_bias 	+= theta_seg_error;
+      result->theta_site_seg_var	+= theta_seg_error * theta_seg_error;
 
-    result->theta_site_non_bias	+= theta_non_error;
-    result->theta_site_non_var	+= theta_non_error * theta_non_error;
+      result->theta_site_non_bias	+= theta_non_error;
+      result->theta_site_non_var	+= theta_non_error * theta_non_error;
 
-    result->random_seg_bias	+= random_seg_error;
-    result->random_seg_var	+= random_seg_error * random_seg_error;
+      result->random_seg_bias		+= random_seg_error;
+      result->random_seg_var		+= random_seg_error * random_seg_error;
 
-    result->random_non_bias	+= random_non_error;
-    result->random_non_var	+= random_non_error * random_non_error;
-  }
+      result->random_non_bias		+= random_non_error;
+      result->random_non_var		+= random_non_error * random_non_error;
+    }
 }
 \end{ccode}
 
   \section{Simulation Runtime}
 
-
+    The simulation is defined in the following sections.
     
     \subsection{Mutation}
     
@@ -2929,25 +2930,33 @@ void print_d_values (population *p, simulation_parameters *sp) {
   compute_pi             	(p, sp, &sp->i.s);
   compute_d              	(p, sp, &sp->i.s);
 
-  statistics *s = &sp->i.s;
-
   // Print a reasonable set of statistics.
-  printf ("%f, %f, %f, %f, %f, %f, %f, %f, %d, %d, %d, %f, %f, %f, %d, %d, %d",
-	  s->d_syn, s->d_non, s->pi_syn, s->pi_non, s->theta_syn, s->theta_non,
-	  s->s_syn, s->s_non, s->dng_size[0], s->dng_size[1], s->dng_size[2],
-	  s->dng_data[0], s->dng_data[1], s->dng_data[2],
-	  s->dng_multiplitons[0], s->dng_multiplitons[1], s->dng_multiplitons[2]);
+  printf ("%f, %f, ", sp->i.s.d_syn, sp->i.s.d_non);
+  printf ("%f, %f, %f, %f, ",
+	  sp->i.s.pi_syn, sp->i.s.pi_non, sp->i.s.theta_syn, sp->i.s.theta_non);
+  printf ("%f, %f, ", sp->i.s.s_syn, sp->i.s.s_non);
+
+  printf ("%d, %d, %d, ",
+	  sp->i.s.dng_size[0], sp->i.s.dng_size[1], sp->i.s.dng_size[2]);
+  printf ("%f, %f, %f, ",
+	  sp->i.s.dng_data[0], sp->i.s.dng_data[1], sp->i.s.dng_data[2]);
+  printf ("%d, %d, %d",
+	  sp->i.s.dng_multiplitons[0], sp->i.s.dng_multiplitons[1],
+	  sp->i.s.dng_multiplitons[2]);
 
   if (sp->o.full_tracing) {
     compute_estimator_accuracy 	(p, sp, &sp->i.s);
 
+    printf (", ");
+
     // Print out additional data about the accuracy of each estimator used.
-    printf (", %f, %f, %f, %f, %f, %f, %f, %f, %f, %f",
-	    s->gl_non_bias, s->gl_non_var,
-	    s->theta_site_seg_bias, s->theta_site_seg_var,
-	    s->theta_site_non_bias, s->theta_site_non_var,
-	    s->random_seg_bias, s->random_seg_var,
-	    s->random_non_bias, s->random_non_var);
+    printf ("%f, %f, ", sp->i.s.gl_non_bias, sp->i.s.gl_non_var);
+    printf ("%f, %f, %f, %f, ",
+	    sp->i.s.theta_site_seg_bias, sp->i.s.theta_site_seg_var,
+	    sp->i.s.theta_site_non_bias, sp->i.s.theta_site_non_var);
+    printf ("%f, %f, %f, %f",
+	    sp->i.s.random_seg_bias, sp->i.s.random_seg_var,
+	    sp->i.s.random_non_bias, sp->i.s.random_non_var);
   }
 
   printf ("\n");
@@ -3169,9 +3178,12 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
 	 double_directive (f, s, "frequency-c:", &sp->g.mutation.frequency_c) ||
 	 double_directive (f, s, "frequency-g:", &sp->g.mutation.frequency_g) ||
 	 double_directive (f, s, "frequency-u:", &sp->g.mutation.frequency_u) ||
-	 double_directive (f, s, "purifying-selection-coefficient:", &sp->m.purifying.selection_coefficient) ||
-	 sequence_directive (f, s, "purifying-optimal-sequence:", &sp->m.purifying.optimal_sequence) ||
-	 double_directive (f, s, "diversifying-selection-coefficient:", &sp->m.diversifying.selection_coefficient) ||
+	 double_directive (f, s, "purifying-selection-coefficient:",
+			   &sp->m.purifying.selection_coefficient) ||
+	 sequence_directive (f, s, "purifying-optimal-sequence:",
+			     &sp->m.purifying.optimal_sequence) ||
+	 double_directive (f, s, "diversifying-selection-coefficient:",
+			   &sp->m.diversifying.selection_coefficient) ||
 	 int_directive (f, s, "sharp-bottleneck-start:", &sp->m.bottleneck.start) ||
 	 int_directive (f, s, "sharp-bottleneck-duration:", &sp->m.bottleneck.duration) ||
 	 int_directive (f, s, "sharp-bottleneck-size:", &sp->m.bottleneck.size) ||
@@ -3182,8 +3194,10 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
 	  fprintf (stderr, "Warning: Specifying intermal parameter random-seed\n")) ||
 	 (double_directive (f, s, "assumed-gl-variance:", &sp->i.assumed_gl_variance) &&
 	  fprintf (stderr, "Warning: Specifying internal parameter assumed-gl-variance\n")) ||
-	 double_directive (f, s, "mutations-per-nucleotide:", &sp->g.mutation.mutations_per_nucleotide) ||
-	 double_directive (f, s, "transitions-per-transversion:", &sp->g.mutation.transitions_per_transversion) || 
+	 double_directive (f, s, "mutations-per-nucleotide:",
+			   &sp->g.mutation.mutations_per_nucleotide) ||
+	 double_directive (f, s, "transitions-per-transversion:",
+			   &sp->g.mutation.transitions_per_transversion) || 
 	 double_directive (f, s, "recombination-rate:", &sp->g.recombination_rate) ||
 	 boolean_directive (f, s, "print-sequences", &sp->o.print_sequences) ||
 	 boolean_directive (f, s, "print-each-generation", &sp->o.print_each_generation) ||
@@ -3194,6 +3208,9 @@ unsigned int parse_options (simulation_parameters *sp, FILE *f) {
 	  boolean_directive (f, s, "statistics-only", &sp->p.statistics_only)) ||
 	 (sp->p.simulation_only &&
 	  boolean_directive (f, s, "make-profile", &sp->o.make_profile)) ||
+	 (sp->o.full_tracing &&
+	  boolean_directive (f, s, "trace-multiplitons-only",
+			     &sp->o.trace_multiplitons_only)) ||
 	 sequence_directive (f, s, "ancestral-sequence:", &sp->g.ancestral_sequence) ||
 	 special_directives (f, s, sp))) {
       fprintf (stderr, "Error: Unrecognized directive or invalid value for '%s'\n", s);
