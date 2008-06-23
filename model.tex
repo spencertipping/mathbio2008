@@ -150,6 +150,10 @@ $
 	  generated with this option should look like this:
 
 	  \begin{verbatim}
+begin-comment
+[Some descriptive text]
+end-comment
+
 trials: 100
 population-size: 500
 statistics-only
@@ -157,8 +161,12 @@ end-of-options
 
 !2naAS+a/GAuga12
 !7hSGJas2jtswdug
-[...]
+[more sequences]
 	  \end{verbatim}
+
+	  The blocks of sequences have blank lines to separate the trials for
+	  readability, although the amount of whitespace is not relevant to the
+	  sequence reader.
 
           \item[print-each-generation]
           Specifying this directive will cause the simulation to print
@@ -744,10 +752,10 @@ __functions_simple__(parent_type, child_type)
 inline void seed_rng (unsigned int seed)
   {ca_rng_initialize (seed);}
 
-inline unsigned int random_integer ()
+conditional_inline unsigned int random_integer ()
   {return ca_rng_get_int ();}
 
-inline double normalized_random ()
+conditional_inline double normalized_random ()
   {return (double) random_integer () / (double) 0xfffffffful;}
 \end{ccode}
 
@@ -1036,13 +1044,13 @@ conditional_inline int codon_set_singleton (codon_set s) {
   // Check the two lower nucleotides first.
   codon_set _s = ((s >> 32) & 0xfffffffful) | (s & 0xfffffffful);
   bool c0 = changes_in_group (_s & 0x11111111ull,
-                        _s & 0x22222222ull,
-                        _s & 0x44444444ull,
-                        _s & 0x88888888ull);
+			      _s & 0x22222222ull,
+			      _s & 0x44444444ull,
+			      _s & 0x88888888ull);
   bool c1 = changes_in_group (_s & 0x000f000full,
-                        _s & 0x00f000f0ull,
-                        _s & 0x0f000f00ull,
-                        _s & 0xf000f000ull);
+			      _s & 0x00f000f0ull,
+			      _s & 0x0f000f00ull,
+			      _s & 0xf000f000ull);
   if (c0 && c1)
     return -1;
   else {
@@ -1260,7 +1268,7 @@ inline void set_nucleotide_at_position (sequence *s, nucleotide n, unsigned int 
   s->data[position / 3] = inherit_nuc (s->data[position / 3], n, 2 - (position % 3));
 }
 
-void print_sequence (sequence *s, FILE *f, bool packed) {
+conditional_inline void print_sequence (sequence *s, FILE *f, bool packed) {
   // Prints a serialized representation of the sequence s to the file f. If
   // packed is true, then packed form is used; otherwise nucleotide form is
   // used.
@@ -1282,7 +1290,7 @@ void print_sequence (sequence *s, FILE *f, bool packed) {
 			    nucleotide_chars[pick (s->data[i], 0)]);
 }
 
-sequence *read_sequence (const char *input, sequence *dest) {
+conditional_inline sequence *read_sequence (const char *input, sequence *dest) {
   unsigned int position = 0; 	// In nucleotides if reading a nucleotide-form
 				// sequence, and codons if packed-form.
   unsigned int l   	= 0;	// Same here.
@@ -1398,14 +1406,13 @@ __fitness_vector_binary_operation__(fitness_vector_mul, *)
 inline double fitness_vector_magnitude (fitness_vector *v)
   {return v->data[v->length - 1];}
 
-conditional_inline unsigned int choose_individual (double d, fitness_vector *v, population *p) {
-  // We assume that d is between 0 and 1. Choosing an individual involves
-  // computing the magnitude of v and scaling by that much.
+conditional_inline unsigned int choose_individual (fitness_vector *v) {
+  // Returns the index of a randomly chosen individual.
   // This function is O(n log n) in the size of the fitness vector, since a
   // binary search is used.
   if (v != NULL) {
     // Binary-search the population.
-    double		point 	= d * fitness_vector_magnitude (v);
+    double		point 	= normalized_random () * fitness_vector_magnitude (v);
     unsigned int	shift 	= (v->length / 4) | 1;
     unsigned int	result 	= v->length / 2;
 
@@ -1427,7 +1434,7 @@ conditional_inline unsigned int choose_individual (double d, fitness_vector *v, 
     }
   } else
     // Simply choose a random element, since they all carry the same weight.
-    return random_integer () % p->length;
+    return random_integer () % v->length;
 }
 \end{ccode}
 
@@ -2079,53 +2086,53 @@ void compute_nei_gojobori (population *p, simulation_parameters *sp, statistics 
 \begin{ccode}
 void compute_theta_site (population *p, simulation_parameters *sp, statistics *result,
 			 unsigned int codon_site, codon_set cs) {
-    unsigned int cs_size = codon_set_count (cs);
+  unsigned int cs_size = codon_set_count (cs);
 
-    // If the site segregates, then we compute theta for it. Otherwise, we pass
-    // it up.
-    result->theta_site_seg.data[codon_site] = 0.0;
+  // If the site segregates, then we compute theta for it. Otherwise, we pass
+  // it up.
+  result->theta_site_seg.data[codon_site] = 0.0;
 
-    codon cs_mask = codon_set_mask (cs);
+  codon cs_mask = codon_set_mask (cs);
 
+  for (unsigned int i = 0; i < 3; i++)
+    if (cs_mask & (1 << (i * 2)))
+      result->theta_site_seg.data[codon_site] += 1.0;
+
+  if (cs_size == 2 && codon_set_singleton (cs) != -1) {
+    // It's a singleton. In this case, it's either synonymous or not.
+    if (! codon_set_synonymous (cs))
+      result->theta_site_non.data[codon_site] = 1.0;
+  } else if (cs_size > 1)
+    // Determine which nucleotides segregate.
     for (unsigned int i = 0; i < 3; i++)
-      if (cs_mask & (1 << (i * 2)))
-	result->theta_site_seg.data[codon_site] += 1.0;
+      if (cs_mask & (1 << (i * 2))) {
+	// The condition on this if statement is just a way of determining
+	// whether we see mutation at a given nucleotide site.
+	double nc        = sp->i.assumed_gl_variance * (double) result->dng_size[i];
+	double ng_factor = (sp->i.assumed_gl_variance == 0.0) ?
+			     ((result->dng_size[i] > 0) ? 1.0 : 0.0) :
+			     nc / (1.0 + nc);
+	double co_factor = 1.0 - ng_factor;
+	double ng_est    = result->dng_data[i];
+	double co_est    = 0.0;
+	double non       = ng_factor * ng_est;
 
-    if (cs_size == 2 && codon_set_singleton (cs) != -1) {
-      // It's a singleton. In this case, it's either synonymous or not.
-      if (! codon_set_synonymous (cs))
-	result->theta_site_non.data[codon_site] = 1.0;
-    } else if (cs_size > 1)
-      // Determine which nucleotides segregate.
-      for (unsigned int i = 0; i < 3; i++)
-	if (cs_mask & (1 << (i * 2))) {
-	  // The condition on this if statement is just a way of determining
-	  // whether we see mutation at a given nucleotide site.
-	  double nc        = sp->i.assumed_gl_variance * (double) result->dng_size[i];
-	  double ng_factor = (sp->i.assumed_gl_variance == 0.0) ?
-			       ((result->dng_size[i] > 0) ? 1.0 : 0.0) :
-			       nc / (1.0 + nc);
-	  double co_factor = 1.0 - ng_factor;
-	  double ng_est    = result->dng_data[i];
-	  double co_est    = 0.0;
-	  double non       = ng_factor * ng_est;
+	// Count the occurrence of the multipliton.
+	result->dng_multiplitons[i]++;
 
-	  // Count the occurrence of the multipliton.
-	  result->dng_multiplitons[i]++;
-
-	  if (co_factor > 0.0) {
-	    // Average out all of the combinatorial numbers for the given
-	    // codons. Weight by the frequency of each, so we actually get the
-	    // values from the population itself.
-	    double total = 0.0;
-	    for (unsigned int j = 0; j < p->length; j++)
-	      total += result->gl_data[i][_idx(p->data[j].data[codon_site])];
-	    co_est = total / (double) p->length;
-	    non += co_factor * co_est;
-	  }
-
-	  result->theta_site_non.data[codon_site] += non;
+	if (co_factor > 0.0) {
+	  // Average out all of the combinatorial numbers for the given
+	  // codons. Weight by the frequency of each, so we actually get the
+	  // values from the population itself.
+	  double total = 0.0;
+	  for (unsigned int j = 0; j < p->length; j++)
+	    total += result->gl_data[i][_idx(p->data[j].data[codon_site])];
+	  co_est = total / (double) p->length;
+	  non += co_factor * co_est;
 	}
+
+	result->theta_site_non.data[codon_site] += non;
+      }
 }
 
 void compute_theta (population *p, simulation_parameters *sp, statistics *result) {
@@ -2687,9 +2694,14 @@ inline double sharp_population_bottleneck (
 
 	For even subdivision, we temporarily partition the population into
 	evenly sized groups (minus the fact that the group size might not evenly
-	    divide the population size), and then reunite them after some time.
+	divide the population size), and then reunite them after some time.
 	This means creating a matrix with multiple squares of ones along the
 	primary diagonal, and everything else zero.
+
+	In practice, we do something a little different. Instead of making
+	squares, we make a sparse field of ones throughout the matrix that ends
+	up being equivalent. The only reason we do this is because the modulus
+	operator makes more sense to me personally than the division operator.
 
 \begin{ccode}
 inline double even_population_subdivision (
@@ -2698,7 +2710,7 @@ inline double even_population_subdivision (
   unsigned int denom = sp->g.population_size / sp->m.subdivision.size;
   if (generation >= sp->m.subdivision.start &&
       generation < sp->m.subdivision.start + sp->m.subdivision.duration &&
-      parent_idx / denom != child_idx / denom)
+      parent_idx % denom != child_idx % denom)
     return 0.0;
   else
     return 1.0;
@@ -2709,14 +2721,16 @@ inline double even_population_subdivision (
 
       We cannot modify the population in-place, so we actually have two separate
       populations. The first represents the parent generation and the second
-      represents the child generation. This function also performs mutation on
-      each child sequence.
+      represents the child generation. After each generation, the pointers to
+      the two populations are exchanged and the old child population becomes the
+      parent population.
 
 \begin{ccode}
-conditional_inline void populate_parent_fitness (population *parents, simulation_parameters *sp) {
+conditional_inline void populate_parent_fitness (
+			  population *parents, simulation_parameters *sp) {
   // Creates the vector for the parents' fitnesses and stores it in sp.
   for (unsigned int i = 0; i < parents->length; i++) {
-    double current;
+    double current = 0.0;
 
     switch (sp->g.selection_model) {
       case DIVERSIFYING_SELECTION:
@@ -2735,12 +2749,13 @@ conditional_inline void populate_parent_fitness (population *parents, simulation
   }
 }
 
-conditional_inline void consider_drift_on_fitness (population *parents, unsigned int generation,
-				       unsigned int child_index, simulation_parameters *sp) {
+conditional_inline void consider_drift_on_fitness (
+			  population *parents, unsigned int generation,
+			  unsigned int child_index, simulation_parameters *sp) {
   // Multiplies drift into the resulting fitness vector.
   if (sp->g.drift_model != NEUTRAL_DRIFT) {
     for (unsigned int i = 0; i < parents->length; i++) {
-      double current;
+      double current = 0.0;
 
       switch (sp->g.drift_model) {
         case SHARP_BOTTLENECK_DRIFT:
@@ -2824,17 +2839,18 @@ conditional_inline void perform_inheritance (
     population *parents, population *children,
     unsigned int child_index, unsigned int generation,
     fitness_vector *parent_fitness, simulation_parameters *sp) {
+
   // Inherits from either one or two parents, as appropriate.
   if (normalized_random () < sp->g.recombination_rate) {
     // Perform a recombination. This means that we choose two distinct parents
     // at random.
-    unsigned int parent_1 = choose_individual (normalized_random (), parent_fitness, parents);
+    unsigned int parent_1 = choose_individual (parent_fitness);
     unsigned int parent_2 = parent_1;
 
     // In theory, this never has to be false; however, in practice we can
     // choose one or two and it should almost always happen.
     while (parent_2 == parent_1)
-      parent_2 = choose_individual (normalized_random (), parent_fitness, parents);
+      parent_2 = choose_individual (parent_fitness);
 
     unsigned int split_point = (int)
       (normalized_random () * parents->data[parent_1].length * 3);
@@ -2847,7 +2863,7 @@ conditional_inline void perform_inheritance (
     do_trace_recombination (split_point, generation, child_index, parent_1,
 			    parent_2, parents, children, sp);
   } else {
-    unsigned int parent_index = choose_individual (normalized_random (), parent_fitness, parents);
+    unsigned int parent_index = choose_individual (parent_fitness);
     copy_sequence (parents->data + parent_index, children->data + child_index);
     do_trace_inheritance (child_index, parent_index, generation, children, sp);
   }
@@ -2856,6 +2872,7 @@ conditional_inline void perform_inheritance (
 conditional_inline void choose_parents (
     population *parents, population *children,
     simulation_parameters *sp, unsigned int generation) {
+
   // Run through the population and recombine where necessary, performing simple
   // redirection where possible. There may be places where time could be saved
   // by pointer shuffling rather than data copies, but I'm not seeing them yet.
@@ -2888,8 +2905,8 @@ conditional_inline void choose_parents (
 
       The runtime requirements are fairly straightforward. Primarily, we need to
       instantiate a set of simulation parameters (which involves defining the
-	  appropriate functions for selection and drift) and allocate and then
-      free two populations. Then we need to perform statistical analysis on the
+      appropriate functions for selection and drift) and allocate and then free
+      two populations. Then we need to perform statistical analysis on the
       results and print those to \verb|stdout|.
 
       \subsubsection{Printing}

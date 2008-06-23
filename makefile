@@ -5,6 +5,7 @@ CC_DEBUG_OPTS	= $(CC_OPTS) -DDEBUG -pg
 
 GPROF		= gprof
 GPROF_OPTS	=
+GPROF_SUM_OPTS	= -s
 
 SD		= sd
 SD_OPTS		= --no-cpp --extension=h --literal-language=ccode --line-comment=//
@@ -16,7 +17,7 @@ TEX_OPTS	=
 VALGRIND	= valgrind
 VALGRIND_OPTS	= --leak-check=full -v --show-reachable=yes
 MEMCHECK_OPTS	= --tool=memcheck
-CACHEGRIND_OPTS	= --tool=cachegrind
+CACHEGRIND_OPTS	= --tool=callgrind --simulate-cache=yes
 
 PROFILES	= linked-profiles
 
@@ -29,7 +30,7 @@ bin: model-runtime model-debug
 bench: model-runtime
 	time ./$< < $(PROFILES)/bench > /dev/null
 
-cache: model-debug
+cache: model-runtime
 	$(VALGRIND) $(CACHEGRIND_OPTS) ./$< < $(PROFILES)/cache || echo
 
 check: model-runtime
@@ -52,7 +53,14 @@ mem3: model-debug
 	$(VALGRIND) $(MEMCHECK_OPTS) ./$< < $(PROFILES)/mem1 || echo
 
 prof: model-debug
-	./$< < $(PROFILES)/prof && $(GPROF) $(GPROF_OPTS) $< > prof
+	rm -f gmon.sum gmon.out
+	./$< < $(PROFILES)/prof
+	mv gmon.out gmon.sum
+	for i in 1 2 3 4 5 6 7 8 9 10; do \
+	  ./$< < $(PROFILES)/prof; \
+	  $(GPROF) $(GPROF_SUM_OPTS) $< gmon.out gmon.sum; \
+	done
+	$(GPROF) $(GPROF_OPTS) $< > prof
 
 model-runtime: ca-rng.h model.h model-runtime.c
 	$(CC) $(CC_RUN_OPTS) -o $@ model-runtime.c
