@@ -830,6 +830,8 @@ typedef uint8_t		bool;
 #define asp 18
 #define glu 19
 #define gly 20
+
+#define n_acids 21
 \end{ccode}
 
       We implement a lookup table to translate codons into amino acids.
@@ -1416,8 +1418,10 @@ conditional_inline unsigned int choose_individual (fitness_vector *v) {
     unsigned int	shift 	= (v->length / 4) | 1;
     unsigned int	result 	= v->length / 2;
 
-    if (point == 0.0)
-      return 0;
+    if (fitness_vector_magnitude (v) == 0.0) {
+      fprintf (stderr, "Internal error: The magnitude of the fitness vector is zero.\n");
+      exit (EXIT_FAILURE);
+    }
 
     while (TRUE) {
       if (result >= v->length)	result = v->length - 1;
@@ -1722,13 +1726,34 @@ typedef struct {
 } model_parameters;
 \end{ccode}
 
-      \subsubsection{Simulation parameters}
-	\label{sec:simulation-parameter-complete}
+      \subsubsection{Internal parameters}
+	\label{sec:internal-parameters}
 
-	We define the full simulation parameter structure here. The variable
-	names are shortened to facilitate easy access to the fields.
+	Parameters internal to the simulation are used as a workspace as the
+	simulation is running. These are primarily here for optimization,
+	although full tracing requires the history to be persistent across
+	generations.
+
+	Of note is the \verb|diversifying_selection_cache| parameter, which
+	stores a list of codons at each site and the number of each. Since
+	diversifying selection requires a comparison with each codon in the
+	column and the mutation rate per codon site is fairly low, we can
+	optimize this by caching the count of each codon in the site and
+	comparing just against the listed codons.
+
+	We can take this another step as well. Since the amino acids are what we
+	compare against, we can just store the amino acid translations and their
+	frequencies. This should end up reducing the $O(n^2)$ algorithm to
+	$O(n)$, a 400-fold speed improvement for the standard parameters.
 
 \begin{ccode}
+typedef struct {
+  amino_acid		freqs[21];
+  unsigned int		total;
+} diversifying_aa_freq_site;
+
+__define_structure_simple__(diversifying_aa_freq, diversifying_aa_freq_site)
+
 typedef struct {
   // These fields are used for internal purposes. We put them here to be
   // effectively global to the thread being run.
@@ -1739,8 +1764,17 @@ typedef struct {
   double		assumed_gl_variance;
   unsigned int		random_seed;
   statistics		s;
+  diversifying_aa_freq	*diversifying_cache;
 } simulation_internal_data;
+\end{ccode}
 
+      \subsubsection{Simulation parameters}
+	\label{sec:simulation-parameter-complete}
+
+	We define the full simulation parameter structure here. The variable
+	names are shortened to facilitate easy access to the fields.
+
+\begin{ccode}
 typedef struct {
   output_parameters		o;
   process_parameters		p;
@@ -1803,6 +1837,7 @@ void initialize_simulation_parameters (simulation_parameters *sp) {
   sp->i.child_fitness_vector			= NULL;
   sp->i.result_fitness_vector			= NULL;
   sp->i.history					= NULL;
+  sp->i.diversifying_cache			= create_diversifying_aa_freq ();
 
   initialize_statistics	(&sp->i.s);
 }
@@ -1834,6 +1869,10 @@ void delete_simulation_parameters (simulation_parameters *sp) {
   delete_population_history (sp->i.history);
   free (sp->i.history);
   sp->i.history = NULL;
+
+  delete_diversifying_aa_freq (sp->i.diversifying_cache);
+  free (sp->i.diversifying_cache);
+  sp->i.diversifying_cache = NULL;
 
   delete_statistics (&sp->i.s);
 }
@@ -2612,7 +2651,7 @@ conditional_inline void mutate_sequence (sequence *s, simulation_parameters *sp,
 	be called $O(ng)$ times, where $n$ is the number of individuals in a
 	population and g is the number of generations. For that reason, any
 	optimizations available here are extremely valuable. (I am not aware of
-	    any possibilities for optimization at the moment.)
+	any possibilities for optimization at the moment.)
 
 \begin{ccode}
 conditional_inline double purifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
@@ -2640,31 +2679,82 @@ conditional_inline double purifying_selection (population *p, unsigned int idx, 
 
 	Diversifying selection begins with 1 and multiplies by a selection
 	factor for each amino acid difference that the organism has at each
-	position. Then we divide by the number of other individuals.
+	position.
+
+	This algorithm is optimized as follows: Before ascertaining the fitness
+	of each parent, we first run through each codon site and count up the
+	number of amino acids that appear there. (We ignore anything after a
+	stop codon.) So each site ends up with a count of each amino acid and a
+	total number of amino acids translated at that site. Then when we look
+	at a single individual, we can just go through the sites and add the
+	total number of amino acids translated minus the number that were the
+	same as the one for that site to the number of differences. For example,
+	if 40 total amino acids were coded at site 3, the individual whose
+	fitness is to be determined codes for a tryptophan at that site, and 5
+	others code for a tryptophan at that site, then the number of
+	differences is 35.
+
+	This optimization reduces the $O(nl)$ algorithm, where $n$ is the number
+	of individuals and $l$ is the sequence length, to a simple $O(l)$
+	algorithm for approximately a 200-factor speed increase on a population
+	size of 500. The only slow part is the cache operation, but that must be
+	performed only once per generation, which is already $O(nl)$ due to the
+	memory copy operation for sequence parentage.
+
+	The \verb|cache_diversifying_selection| method should be called before
+	any fitness assessment is performed, and then fitness assessment may
+	proceed normally with the \verb|diversifying_selection| function.
 
 \begin{ccode}
-conditional_inline double diversifying_selection (population *p, unsigned int idx, simulation_parameters *sp) {
-  unsigned int differences = 0;
-  unsigned int stop_position = p->data[idx].length;
+conditional_inline void cache_diversifying_selection (population *p,
+			  simulation_parameters *sp) {
+  // Go through each site and count up the number of each amino acid that is
+  // coded.
 
-  // Pre-locate the stop codon in the original sequence, if any. This
-  // accelerates the below loop.
-  for (unsigned int i = 0; i < p->data[idx].length; i++)
-    if (amino_lookup[_idx(p->data[idx].data[i])] == sto) {
-      stop_position = i;
-      break;
-    }
+  // Zero out all of the frequencies.
+  for (unsigned int ci = 0; ci < p->data[0].length; ci++)
+    for (unsigned int i = 0; i < n_acids; i++)
+      sp->i.diversifying_cache->data[ci].freqs[i] = 0;
 
-  for (unsigned int i = 0; i < p->length; i++)
-    for (unsigned int j = 0; j < stop_position; j++)
-      if (amino_lookup[_idx(p->data[i].data[j])] == sto)
-	// No further differences to take into account, so stop comparing
-	// against this individual.
+  // This loop needs to be organized by individuals because we break out of the
+  // inner loop upon hitting a stop codon. If we did it the other way, then
+  // instead of ignoring the rest of the sequence it would ignore the rest of
+  // the site across sequences.
+  unsigned int stops = 0;
+
+  for (unsigned int i = 0; i < p->length; i++) {
+    // Now go through each site and total up the amino acid counts.
+    // Make sure to stop counting after a stop codon.
+    for (unsigned int ci = 0; ci < p->data[i].length; ci++)
+      if (amino_lookup[_idx(p->data[i].data[ci])] == sto) {
+	stops++;
 	break;
-      else if (! synonymous (p->data[i].data[j], p->data[idx].data[j]))
-	differences++;
+      } else
+	sp->i.diversifying_cache->data[ci].freqs[amino_lookup[_idx(p->data[i].data[ci])]]++;
 
-  return (double) (differences + 1) / (double) (p->length - 1);
+    sp->i.diversifying_cache->data[ci].total = p->length - stops;
+  }
+}
+
+conditional_inline double diversifying_selection (
+			    population *p, unsigned int idx,
+			    simulation_parameters *sp) {
+  unsigned int differences = 0;
+
+  // Optimized computation! Using the diversifying selection cache, we apply
+  // this reasoning: Each amino acid's frequency is recorded in the table. If we
+  // see the amino acid X in a sequence, then we subtract the number of
+  // occurrences of X in its codon site from the total number of individuals to
+  // get the number of differences in that site. This reduces O(n^2) to O(n).
+
+  for (unsigned int ci = 0;
+       ci < p->data[idx].length && amino_lookup[_idx(p->data[idx].data[ci])] != sto;
+       ci++)
+    differences += sp->i.diversifying_cache->data[ci].total -
+		   sp->i.diversifying_cache->data[ci].freqs[amino_lookup[_idx(p->data[idx].data[ci])]];
+
+  return pow (1.0 - sp->m.diversifying.selection_coefficient,
+	      -(double) differences / (double) p->length);
 }
 \end{ccode}
 
@@ -2724,6 +2814,8 @@ inline double even_population_subdivision (
       represents the child generation. After each generation, the pointers to
       the two populations are exchanged and the old child population becomes the
       parent population.
+
+      [More documentation later...]
 
 \begin{ccode}
 conditional_inline void populate_parent_fitness (
@@ -2888,6 +2980,11 @@ conditional_inline void choose_parents (
     for (unsigned int i = 0; i < parents->length; i++)
       sp->i.parent_fitness_vector->data[i] = (double) (i + 1);
 
+  // If using diversifying selection, precompute the cached amino acid
+  // frequencies.
+  if (sp->g.selection_model == DIVERSIFYING_SELECTION)
+    cache_diversifying_selection (parents, sp);
+
   if (sp->g.drift_model != NEUTRAL_DRIFT)
     resulting_vector = sp->i.result_fitness_vector;
 
@@ -3041,6 +3138,8 @@ void allocate_internal_memory (simulation_parameters *sp) {
     ensure_fitness_vector (sp->i.child_fitness_vector,  sp->g.population_size);
     ensure_fitness_vector (sp->i.result_fitness_vector, sp->g.population_size);
   }
+
+  ensure_diversifying_aa_freq (sp->i.diversifying_cache, sp->g.ancestral_sequence->length);
 
   if (sp->o.full_tracing) {
     sp->i.history = create_population_history ();
