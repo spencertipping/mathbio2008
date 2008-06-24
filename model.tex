@@ -1408,7 +1408,7 @@ __fitness_vector_binary_operation__(fitness_vector_mul, *)
 inline double fitness_vector_magnitude (fitness_vector *v)
   {return v->data[v->length - 1];}
 
-conditional_inline unsigned int choose_individual (fitness_vector *v) {
+conditional_inline unsigned int choose_individual (fitness_vector *v, population *p) {
   // Returns the index of a randomly chosen individual.
   // This function is O(n log n) in the size of the fitness vector, since a
   // binary search is used.
@@ -1438,7 +1438,7 @@ conditional_inline unsigned int choose_individual (fitness_vector *v) {
     }
   } else
     // Simply choose a random element, since they all carry the same weight.
-    return random_integer () % v->length;
+    return random_integer () % p->length;
 }
 \end{ccode}
 
@@ -2936,13 +2936,13 @@ conditional_inline void perform_inheritance (
   if (normalized_random () < sp->g.recombination_rate) {
     // Perform a recombination. This means that we choose two distinct parents
     // at random.
-    unsigned int parent_1 = choose_individual (parent_fitness);
+    unsigned int parent_1 = choose_individual (parent_fitness, parents);
     unsigned int parent_2 = parent_1;
 
     // In theory, this never has to be false; however, in practice we can
     // choose one or two and it should almost always happen.
     while (parent_2 == parent_1)
-      parent_2 = choose_individual (parent_fitness);
+      parent_2 = choose_individual (parent_fitness, parents);
 
     unsigned int split_point = (int)
       (normalized_random () * parents->data[parent_1].length * 3);
@@ -2955,7 +2955,7 @@ conditional_inline void perform_inheritance (
     do_trace_recombination (split_point, generation, child_index, parent_1,
 			    parent_2, parents, children, sp);
   } else {
-    unsigned int parent_index = choose_individual (parent_fitness);
+    unsigned int parent_index = choose_individual (parent_fitness, parents);
     copy_sequence (parents->data + parent_index, children->data + child_index);
     do_trace_inheritance (child_index, parent_index, generation, children, sp);
   }
