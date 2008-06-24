@@ -2720,17 +2720,23 @@ conditional_inline void cache_diversifying_selection (population *p,
   // inner loop upon hitting a stop codon. If we did it the other way, then
   // instead of ignoring the rest of the sequence it would ignore the rest of
   // the site across sequences.
-  unsigned int stops = 0;
-
-  for (unsigned int i = 0; i < p->length; i++) {
+  for (unsigned int i = 0; i < p->length; i++)
     // Now go through each site and total up the amino acid counts.
     // Make sure to stop counting after a stop codon.
-    for (unsigned int ci = 0; ci < p->data[i].length; ci++)
-      if (amino_lookup[_idx(p->data[i].data[ci])] == sto) {
+    for (unsigned int ci = 0;
+	 ci < p->data[i].length &&
+	   amino_lookup[_idx(p->data[i].data[ci])] != sto;
+	 ci++)
+      sp->i.diversifying_cache->data[ci].freqs[amino_lookup[_idx(p->data[i].data[ci])]]++;
+
+  // Count the number of stop codons in each position. Keep any stop codons that
+  // occurred before, since these sequences should no longer be considered.
+  unsigned int stops = 0;
+
+  for (unsigned int ci = 0; ci < p->data[0].length; ci++) {
+    for (unsigned int i = 0; i < p->length; i++)
+      if (amino_lookup[_idx(p->data[i].data[ci])] == sto)
 	stops++;
-	break;
-      } else
-	sp->i.diversifying_cache->data[ci].freqs[amino_lookup[_idx(p->data[i].data[ci])]]++;
 
     sp->i.diversifying_cache->data[ci].total = p->length - stops;
   }
