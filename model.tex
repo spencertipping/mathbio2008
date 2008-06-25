@@ -2851,24 +2851,21 @@ conditional_inline void consider_drift_on_fitness (
 			  population *parents, unsigned int generation,
 			  unsigned int child_index, simulation_parameters *sp) {
   // Multiplies drift into the resulting fitness vector.
-  if (sp->g.drift_model != NEUTRAL_DRIFT) {
+  if (sp->g.drift_model == EVEN_SUBDIVISION_DRIFT) {
     for (unsigned int i = 0; i < parents->length; i++) {
       double current = 0.0;
 
       switch (sp->g.drift_model) {
-        case SHARP_BOTTLENECK_DRIFT:
-	  current = sharp_population_bottleneck (generation, i, child_index, sp);
-	  break;
-        case EVEN_SUBDIVISION_DRIFT:
+	case EVEN_SUBDIVISION_DRIFT:
 	  current = even_population_subdivision (generation, i, child_index, sp);
 	  break;
-        default:
+	default:
 	  fprintf (stderr, "Internal error: Drift model %d does not exist.\n", sp->g.drift_model);
 	  exit (EXIT_FAILURE);
       }
 
       sp->i.child_fitness_vector->data[i] = current +
-        ((i > 0) ? sp->i.child_fitness_vector->data[i - 1] : 0.0);
+	((i > 0) ? sp->i.child_fitness_vector->data[i - 1] : 0.0);
     }
 
     fitness_vector_mul (sp->i.parent_fitness_vector, sp->i.child_fitness_vector,
@@ -2991,10 +2988,20 @@ conditional_inline void choose_parents (
   if (sp->g.selection_model == DIVERSIFYING_SELECTION)
     cache_diversifying_selection (parents, sp);
 
-  if (sp->g.drift_model != NEUTRAL_DRIFT)
-    resulting_vector = sp->i.result_fitness_vector;
+  unsigned int children_to_simulate = children->length;
 
-  for (unsigned int i = 0; i < children->length; i++) {
+  if (sp->g.drift_model == EVEN_SUBDIVISION_DRIFT)
+    resulting_vector = sp->i.result_fitness_vector;
+  else if (sp->g.drift_model == SHARP_BOTTLENECK_DRIFT) {
+    sp->i.parent_fitness_vector->length = (generation < sp->m.bottleneck.start ||
+					   generation >= sp->m.bottleneck.start +
+							 sp->m.bottleneck.duration) ?
+					  parents->length :
+					  sp->m.bottleneck.size;
+    children_to_simulate = sp->i.parent_fitness_vector->length;
+  }
+
+  for (unsigned int i = 0; i < children_to_simulate; i++) {
     consider_drift_on_fitness (parents, generation, i, sp);
     perform_inheritance (parents, children, i, generation, resulting_vector, sp);
 
