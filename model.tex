@@ -3001,11 +3001,19 @@ conditional_inline void choose_parents (
     resulting_vector = sp->i.result_fitness_vector;
   else if (sp->g.drift_model == SHARP_BOTTLENECK_DRIFT) {
     sp->i.parent_fitness_vector->length = (generation < sp->m.bottleneck.start ||
-					   generation >= sp->m.bottleneck.start +
-							 sp->m.bottleneck.duration) ?
+					   generation > sp->m.bottleneck.start +
+							sp->m.bottleneck.duration) ?
 					  parents->length :
 					  sp->m.bottleneck.size;
-    children_to_simulate = sp->i.parent_fitness_vector->length;
+    
+    // At the ending generation, we simulate the whole child population.
+    // This way, we repopulate from the still smaller parent fitness
+    // vector without incorporating bottlenecked individuals.
+    children_to_simulate = (generation < sp->m.bottleneck.start ||
+			    generation >= sp->m.bottleneck.start +
+					  sp->m.bottleneck.duration) ?
+			   parents->length :
+			   sp->m.bottleneck.size;
   }
 
   for (unsigned int i = 0; i < children_to_simulate; i++) {
