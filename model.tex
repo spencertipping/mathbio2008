@@ -445,6 +445,10 @@ selection-coefficient: 0.5
 EOF
         \end{verbatim}
 
+	(If you were editing this in a normal text editor, you would just type
+	everything between \verb|begin-comment| and \verb|selection-coefficient: 0.5|,
+	inclusive.)
+	
         Here is an invocation of the model using that profile:
 
         \begin{verbatim}
@@ -2283,22 +2287,25 @@ void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
     result->discrete_pi_seg.data[pos] =
       result->discrete_pi_non.data[pos] = 0.0;
 
-    for (unsigned int s1 = 0; s1 < p->length - 1; s1++)
-      for (unsigned int s2 = s1 + 1; s2 < p->length; s2++)
-	if (p->data[s1].data[pos] != p->data[s2].data[pos]) {
-	  // Count the difference.
-	  unsigned int	n_changes  = changes (p->data[s1].data[pos], p->data[s2].data[pos]);
-	  double	non_factor = discrete_pathways_nonsynonymity (
-	    p->data[s1].data[pos], p->data[s2].data[pos], sp);
+    // Do pairwise comparisons only if there is segregation at this site.
+    if (codon_set_count (codon_site_set (p, pos)) > 1) {
+      for (unsigned int s1 = 0; s1 < p->length - 1; s1++)
+	for (unsigned int s2 = s1 + 1; s2 < p->length; s2++)
+	  if (p->data[s1].data[pos] != p->data[s2].data[pos]) {
+	    // Count the difference.
+	    unsigned int	n_changes  = changes (p->data[s1].data[pos], p->data[s2].data[pos]);
+	    double		non_factor = discrete_pathways_nonsynonymity (
+	      p->data[s1].data[pos], p->data[s2].data[pos], sp);
 
-	  if (n_changes == 0) n_changes = 3;
+	    if (n_changes == 0) n_changes = 3;
 
-	  result->discrete_pi_seg.data[pos] += (double) n_changes;
-	  result->discrete_pi_non.data[pos] += non_factor;
-	}
+	    result->discrete_pi_seg.data[pos] += (double) n_changes;
+	    result->discrete_pi_non.data[pos] += non_factor;
+	  }
 
-    result->discrete_pi_seg.data[pos] *= multiplier;
-    result->discrete_pi_non.data[pos] *= multiplier;
+      result->discrete_pi_seg.data[pos] *= multiplier;
+      result->discrete_pi_non.data[pos] *= multiplier;
+    }
 
     result->pi_syn += result->discrete_pi_seg.data[pos] - result->discrete_pi_non.data[pos];
     result->pi_non += result->discrete_pi_non.data[pos];
