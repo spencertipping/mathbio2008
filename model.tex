@@ -2272,6 +2272,11 @@ inline double discrete_pathways_nonsynonymity (codon c1, codon c2, simulation_pa
       differences within each codon locus across sequences and dividing by the
       number of pairwise comparisons made.
 
+      Similarly to diversifying selection, pi may be linearized by pre-counting
+      the list of codons. This imposes some unnecessary overhead for low
+      sequence counts, but for high sequences it reduces a quadratic to a linear
+      operation.
+
 \begin{ccode}
 void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
   // Fills in the pi computations of the statistical structure.
@@ -2289,19 +2294,33 @@ void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
 
     // Do pairwise comparisons only if there is segregation at this site.
     if (codon_set_count (codon_site_set (p, pos)) > 1) {
-      for (unsigned int s1 = 0; s1 < p->length - 1; s1++)
-	for (unsigned int s2 = s1 + 1; s2 < p->length; s2++)
-	  if (p->data[s1].data[pos] != p->data[s2].data[pos]) {
-	    // Count the difference.
-	    unsigned int	n_changes  = changes (p->data[s1].data[pos], p->data[s2].data[pos]);
-	    double		non_factor = discrete_pathways_nonsynonymity (
-	      p->data[s1].data[pos], p->data[s2].data[pos], sp);
+      unsigned int codon_counts[64] = {0, 0, 0, 0, 0, 0, 0, 0,
+				       0, 0, 0, 0, 0, 0, 0, 0,
+				       0, 0, 0, 0, 0, 0, 0, 0,
+				       0, 0, 0, 0, 0, 0, 0, 0,
+				       0, 0, 0, 0, 0, 0, 0, 0,
+				       0, 0, 0, 0, 0, 0, 0, 0,
+				       0, 0, 0, 0, 0, 0, 0, 0,
+				       0, 0, 0, 0, 0, 0, 0, 0};
 
-	    if (n_changes == 0) n_changes = 3;
+      // Count up all of the codon occurrences.
+      for (unsigned int i = 0; i < p->length; i++)
+	codon_counts[_idx(p->data[pos].data[i])]++;
 
-	    result->discrete_pi_seg.data[pos] += (double) n_changes;
-	    result->discrete_pi_non.data[pos] += non_factor;
-	  }
+      // This is a constant-time algorithm in the number of sequences. The
+      // constant is large (4096), but better than something like 100,000,000.
+      for (unsigned int c1 = 0; c1 < 63; c1++)
+	for (unsigned int c2 = c1 + 1; c2 < 64; c2++) {
+	  // Count the difference.
+	  unsigned int	n_changes  = changes (c1, c2);
+	  double	non_factor = discrete_pathways_nonsynonymity (c1, c2, sp);
+	  unsigned int	bias	   = codon_counts[c1] * codon_counts[c2];
+
+	  if (n_changes == 0) n_changes = 3;
+
+	  result->discrete_pi_seg.data[pos] += (double) n_changes * (double) bias;
+	  result->discrete_pi_non.data[pos] += non_factor * (double) bias;
+	}
 
       result->discrete_pi_seg.data[pos] *= multiplier;
       result->discrete_pi_non.data[pos] *= multiplier;
