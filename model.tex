@@ -1088,11 +1088,6 @@ conditional_inline int codon_set_singleton (codon_set s) {
 inline bool codon_set_inside (codon_set s, codon_set mask)
   {return s == (s & mask);}
 
-inline bool exactly_one (bool a, bool b, bool c, bool d) {
-  return ! ((a && b) || (a && c) || (a && d) ||
-          (b && c) || (b && d) || (c && d));
-}
-
 conditional_inline bool codon_set_synonymous (codon_set s) {
   // Determines whether exactly two codons in a codon set are synonymous with
   // one another.
@@ -2292,39 +2287,37 @@ void compute_pi (population *p, simulation_parameters *sp, statistics *result) {
     result->discrete_pi_seg.data[pos] =
       result->discrete_pi_non.data[pos] = 0.0;
 
-    // Do pairwise comparisons only if there is segregation at this site.
-    if (codon_set_count (codon_site_set (p, pos)) > 1) {
-      unsigned int codon_counts[64] = {0, 0, 0, 0, 0, 0, 0, 0,
-				       0, 0, 0, 0, 0, 0, 0, 0,
-				       0, 0, 0, 0, 0, 0, 0, 0,
-				       0, 0, 0, 0, 0, 0, 0, 0,
-				       0, 0, 0, 0, 0, 0, 0, 0,
-				       0, 0, 0, 0, 0, 0, 0, 0,
-				       0, 0, 0, 0, 0, 0, 0, 0,
-				       0, 0, 0, 0, 0, 0, 0, 0};
+    unsigned int codon_counts[64] = {0, 0, 0, 0, 0, 0, 0, 0,
+				     0, 0, 0, 0, 0, 0, 0, 0,
+				     0, 0, 0, 0, 0, 0, 0, 0,
+				     0, 0, 0, 0, 0, 0, 0, 0,
+				     0, 0, 0, 0, 0, 0, 0, 0,
+				     0, 0, 0, 0, 0, 0, 0, 0,
+				     0, 0, 0, 0, 0, 0, 0, 0,
+				     0, 0, 0, 0, 0, 0, 0, 0};
 
-      // Count up all of the codon occurrences.
-      for (unsigned int i = 0; i < p->length; i++)
-	codon_counts[_idx(p->data[pos].data[i])]++;
+    // Count up all of the codon occurrences. This is linear in the number of
+    // sequences.
+    for (unsigned int i = 0; i < p->length; i++)
+      codon_counts[_idx(p->data[i].data[pos])]++;
 
-      // This is a constant-time algorithm in the number of sequences. The
-      // constant is large (4096), but better than something like 100,000,000.
-      for (unsigned int c1 = 0; c1 < 63; c1++)
-	for (unsigned int c2 = c1 + 1; c2 < 64; c2++) {
-	  // Count the difference.
-	  unsigned int	n_changes  = changes (c1, c2);
-	  double	non_factor = discrete_pathways_nonsynonymity (c1, c2, sp);
-	  unsigned int	bias	   = codon_counts[c1] * codon_counts[c2];
+    // This is a constant-time algorithm in the number of sequences. The
+    // constant is large (2048), but better than something like 100,000,000.
+    for (unsigned int c1 = 0; c1 < 63; c1++)
+      for (unsigned int c2 = c1 + 1; c2 < 64; c2++) {
+	// Count the difference.
+	unsigned int	n_changes  = changes (c1, c2);
+	double		non_factor = discrete_pathways_nonsynonymity (c1, c2, sp);
+	unsigned int	bias	   = codon_counts[c1] * codon_counts[c2];
 
-	  if (n_changes == 0) n_changes = 3;
+	if (n_changes == 0) n_changes = 3;
 
-	  result->discrete_pi_seg.data[pos] += (double) n_changes * (double) bias;
-	  result->discrete_pi_non.data[pos] += non_factor * (double) bias;
-	}
+	result->discrete_pi_seg.data[pos] += (double) n_changes * (double) bias;
+	result->discrete_pi_non.data[pos] += non_factor * (double) bias;
+      }
 
-      result->discrete_pi_seg.data[pos] *= multiplier;
-      result->discrete_pi_non.data[pos] *= multiplier;
-    }
+    result->discrete_pi_seg.data[pos] *= multiplier;
+    result->discrete_pi_non.data[pos] *= multiplier;
 
     result->pi_syn += result->discrete_pi_seg.data[pos] - result->discrete_pi_non.data[pos];
     result->pi_non += result->discrete_pi_non.data[pos];
