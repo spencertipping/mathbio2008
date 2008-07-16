@@ -1,0 +1,71 @@
+#!/usr/bin/python
+
+from sys import stdin, stderr
+
+def convert_codon (ci):
+  # Returns the nucleotide representation of the codon.
+  cs = ['U', 'C', 'A', 'G']
+  return cs[ci >> 4] + cs[(ci >> 2) & 3] + cs[ci & 3]
+
+n_amino_acids = 21
+
+(ser, phe, leu, tyr, cys, trp, pro, his, gln, arg,
+ ile, met, thr, asn, lys, val, ala, asp, glu, gly, sto) = (i for i in range (n_amino_acids))
+
+amino_acid_names = ['ser', 'phe', 'leu', 'tyr', 'cys', 'trp', 'pro', 'his', 'gln', 'arg',
+		    'ile', 'met', 'thr', 'asn', 'lys', 'val', 'ala', 'asp', 'glu', 'gly', 'sto']
+
+amino_acid_translation = [ \
+  phe, phe, leu, leu,
+  ser, ser, ser, ser,
+  tyr, tyr, sto, sto,
+  cys, cys, sto, trp,
+
+  leu, leu, leu, leu,
+  pro, pro, pro, pro,
+  his, his, gln, gln,
+  arg, arg, arg, arg,
+
+  ile, ile, ile, met,
+  thr, thr, thr, thr,
+  asn, asn, lys, lys,
+  ser, ser, arg, arg,
+
+  val, val, val, val,
+  ala, ala, ala, ala,
+  asp, asp, glu, glu,
+  gly, gly, gly, gly]
+
+def main ():
+  codons = [{} for i in range (35)]
+  aminos = [[0] * n_amino_acids for i in range (35)]
+  codon_indices = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+  for c in codons:
+    for ci in range (len (codon_indices)):
+      c[codon_indices[ci]] = 0
+
+  while True:
+    s = stdin.readline ()
+    if len (s) == 0: break
+    if s[0] == '!':
+      for i in range (len (codons)):
+	codons[i][s[i + 1]] += 1
+	codon_index = codon_indices.index (s[i + 1])
+	aa = amino_acid_translation[codon_index]
+	aminos[i][aa] += 1
+
+  print "Codon table:"
+  for ci in range (len (codon_indices)):
+    if sum (c[codon_indices[ci]] for c in codons) != 0:
+      print ("%s" + ", % 4d" * len (codons)) % \
+	    ((convert_codon (ci),) + tuple (c[codon_indices[ci]] for c in codons))
+
+  print
+  print "Amino acid table:"
+  for ai in range (n_amino_acids):
+    if sum (a[ai] for a in aminos) != 0:
+      print ("%s" + ", % 3d" * len (aminos)) % \
+	    ((amino_acid_names[ai],) + tuple (a[ai] for a in aminos))
+
+main ()

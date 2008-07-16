@@ -1,0 +1,80 @@
+#!/usr/bin/python
+
+# Creates a throw-away profile based on standard command-line options.
+
+from sys import argv
+
+sim_only = False
+trials = 1
+generations = 1000
+pop_size = 500
+selection = 'N'
+drift = 'N'
+selection_coeff = 0.5
+drift_start = 500
+drift_duration = 498
+drift_size = 250
+mutation_rate = 0.000034
+recombination_rate = 0.000024
+transition_ratio = 1.3
+
+for i in range (len (argv)):
+  if i == 0:
+    pass
+  elif argv[i] == '-so':
+    sim_only = True
+  elif argv[i].startswith ('-t'):
+    trials = int (argv[i][2:])
+  elif argv[i].startswith ('-g'):
+    generations = int (argv[i][2:])
+  elif argv[i].startswith ('-ps'):
+    pop_size = int (argv[i][3:])
+  elif argv[i].startswith ('-se'):
+    selection = argv[i][3]
+  elif argv[i].startswith ('-dr'):
+    drift = argv[i][3]
+  elif argv[i].startswith ('-sc'):
+    selection_coeff = float (argv[i][3:])
+  elif argv[i].startswith ('-dst'):
+    drift_start = int (argv[i][4:])
+  elif argv[i].startswith ('-dd'):
+    drift_duration = int (argv[i][3:])
+  elif argv[i].startswith ('-dsi'):
+    drift_size = int (argv[i][4:])
+  elif argv[i].startswith ('-mm'):
+    mutation_rate = float (argv[i][3:])
+  elif argv[i].startswith ('-mr'):
+    recombination_rate = float (argv[i][3:])
+  elif argv[i].startswith ('-mt'):
+    transition_ratio = float (argv[i][3:])
+  else:
+    print "Unknown argument: " + argv[i]
+
+if sim_only:
+  print "simulation-only make-profile"
+
+if selection == 'p':
+  print "selection-model: purifying"
+elif selection == 'd':
+  print "selection-model: diversifying"
+
+if drift == 's':
+  print "drift-model: even-subdivision"
+elif drift == 'b':
+  print "drift-model: sharp-bottleneck"
+
+print "trials: " + str (trials)
+print "generations: " + str (generations)
+print "population-size: " + str (pop_size)
+print "sample-size: " + str (pop_size)
+print "purifying-selection-coefficient: " + str (selection_coeff)
+print "diversifying-selection-coefficient: " + str (selection_coeff)
+print "sharp-bottleneck-start: " + str (drift_start)
+print "sharp-bottleneck-duration: " + str (drift_duration)
+print "sharp-bottleneck-size: " + str (drift_size)
+print "even-subdivision-start: " + str (drift_start)
+print "even-subdivision-duration: " + str (drift_duration)
+print "even-subdivision-size: " + str (drift_size)
+print "mutations-per-nucleotide: " + str (mutation_rate)
+print "recombination-rate: " + str (recombination_rate)
+print "transitions-per-transversion: " + str (transition_ratio)
