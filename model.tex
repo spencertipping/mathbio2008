@@ -2778,8 +2778,7 @@ conditional_inline double diversifying_selection (
     differences += sp->i.diversifying_cache->data[ci].total -
 		   sp->i.diversifying_cache->data[ci].freqs[amino_lookup[_idx(p->data[idx].data[ci])]];
 
-  return pow (1.0 - sp->m.diversifying.selection_coefficient,
-	      -(double) differences / (double) p->length);
+  return 1.0 + sp->m.diversifying.selection_coefficient * (double) differences;
 }
 \end{ccode}
 
