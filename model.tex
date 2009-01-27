@@ -1764,6 +1764,7 @@ typedef struct {
   unsigned int		random_seed;
   statistics		s;
   diversifying_aa_freq	*diversifying_cache;
+  double                diversifying_cached_pi;
 } simulation_internal_data;
 \end{ccode}
 
@@ -2759,6 +2760,32 @@ conditional_inline void cache_diversifying_selection (population *p,
 
     sp->i.diversifying_cache->data[ci].total = p->length - stops;
   }
+
+  // Finally, cache a computed pi value. This is done linearly as well, which
+  // is simple because the frequency table has already been computed.
+  //
+  // There is some subtle optimization here. I started with this:
+  //
+  //   for (ci)
+  //     for (i)
+  //       pi += (p->length - f[i]) / p->length
+  //
+  // Since p->length is invariant, we can perform the division later. Then we
+  // have this:
+  //
+  //   pi += p->length - f[i]
+  //
+  // p->length is still invariant, so we may defer the addition to later as
+  // well. The only caveat is that we must multiply the deferred term by the
+  // number of times it was to be added.
+  sp->i.diversifying_cached_pi = 0.0;
+
+  for (unsigned int ci = 0; ci < p->data[0].length; ci++)
+    for (unsigned int i = 0; i < n_acids; i++)
+      sp->i.diversifying_cached_pi -= (double) sp->i.diversifying_cache->data[ci].freqs[i];
+
+  sp->i.diversifying_cached_pi += (double) p->length * n_acids * p->data[0].length;
+  sp->i.diversifying_cached_pi /= (double) p->length * p->data[0].length;
 }
 
 conditional_inline double diversifying_selection (
@@ -2778,7 +2805,10 @@ conditional_inline double diversifying_selection (
     differences += sp->i.diversifying_cache->data[ci].total -
 		   sp->i.diversifying_cache->data[ci].freqs[amino_lookup[_idx(p->data[idx].data[ci])]];
 
-  return 1.0 + sp->m.diversifying.selection_coefficient * (double) differences;
+  double average_differences_from_others = (double) differences / (double) p->length;
+
+  return pow (1.0 / (1.0 - sp->m.diversifying.selection_coefficient),
+              average_differences_from_others - sp->i.diversifying_cached_pi);
 }
 \end{ccode}
 
