@@ -19,7 +19,7 @@ VALGRIND_OPTS	= --leak-check=full -v --show-reachable=yes
 MEMCHECK_OPTS	= --tool=memcheck
 CACHEGRIND_OPTS	= --tool=callgrind --simulate-cache=yes
 
-PROFILES	= linked-profiles
+PROFILES	= profiles
 
 .PHONY: all bin bench cache check clean doc mem mem1 mem2 mem3
 
