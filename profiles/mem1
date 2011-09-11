@@ -4,7 +4,7 @@ time we also want to keep the runtime manageable.
 end-comment
 
 trials: 20
-generations: 10
+generations: 10000
 population-size: 20
 drift-model: sharp-bottleneck
 sharp-bottleneck-start: 2
