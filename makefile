@@ -37,7 +37,7 @@ check: model-runtime
 	./$< < $(PROFILES)/check > check.csv
 
 clean:
-	rm -f *.aux *.dvi *.h *.log *.out *.pdf *.toc model-runtime model-debug prof check.csv
+	rm -f *.aux *.dvi *.h *.log *.out *.toc model-runtime model-debug prof check.csv
 
 doc: model.pdf
 
