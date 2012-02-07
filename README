@@ -1,9 +1,12 @@
 This is a math/biology research project I participated in during the summer of
 2008. I wrote all of the code and did about half of the mathematical modeling
-and design, and my more educated colleagues found biology publications and made
-sure the simulation was right :)
+and design, and my more educated colleagues pored over biology journals, came
+up with the ideas, and made sure the simulation was right :)
 
-Because this research was funded by the NSF, it's now open source under the MIT
-license.
+This project was funded by an NSF grant.
 
-The interesting stuff is in model.pdf, which explains how to build the project.
+MIT license as usual.
+
+The interesting stuff is in model.pdf, which explains how to build the project
+and how to use it (though I doubt it provides enough context to be generally
+useful...).
